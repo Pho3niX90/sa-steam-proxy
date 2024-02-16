@@ -239,7 +239,7 @@ const app_module_1 = __webpack_require__(2);
 const platform_fastify_1 = __webpack_require__(8);
 async function bootstrap() {
     const app = await core_1.NestFactory.create(app_module_1.AppModule, new platform_fastify_1.FastifyAdapter());
-    await app.listen(8080);
+    await app.listen(8080, '0.0.0.0');
 }
 bootstrap();
 
