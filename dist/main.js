@@ -70,42 +70,47 @@ let isHealthy = true;
 let isRateLimited = false;
 let lastFailureUrl = '';
 const appendQuery = __webpack_require__(7);
-const metrics = {
-    total: 0,
-    successTotal: 0,
-    failuresTotal: 0,
-};
 let AppController = class AppController {
     constructor(appService) {
         this.appService = appService;
+        this.rollingWindow = [];
+        this.requestsPerSecond = 0;
+        this.metrics = {
+            total: 0,
+            successTotal: 0,
+            failuresTotal: 0,
+        };
     }
     clearMetrics() {
         console.log(`running cron`);
-        metrics.total = 0;
-        metrics.successTotal = 0;
-        metrics.failuresTotal = 0;
+        this.metrics.total = 0;
+        this.metrics.successTotal = 0;
+        this.metrics.failuresTotal = 0;
         this.checkRateLimiting();
     }
     getHealth() {
         return isHealthy ? 'ok' : isRateLimited ? 'limit' : 'nok';
     }
     async doProxy(request, response) {
+        this.rollingWindow = this.rollingWindow.filter((timestamp) => Date.now() - timestamp < 60000);
+        this.rollingWindow.push(Date.now());
+        this.requestsPerSecond = this.rollingWindow.length;
         if (!isHealthy || isRateLimited) {
             response.headers({ 'rate-limited': isRateLimited });
             response.status(429);
             response.send('nok');
-            console.log(429, `URL (rejected) ${request.originalUrl}`);
+            console.log(429, this.requestsPerSecond, `URL (rejected) ${request.originalUrl}`);
         }
         else {
             response.send(await this.doRequest(request.originalUrl, response));
         }
     }
     setStatus(s, t) {
-        metrics.total++;
+        this.metrics.total++;
         if (s < 400) {
             isHealthy = true;
             t.headers({ 'rate-limited': isRateLimited });
-            metrics.successTotal++;
+            this.metrics.successTotal++;
         }
         else {
             isHealthy = false;
@@ -116,7 +121,7 @@ let AppController = class AppController {
             else {
                 t.headers({ 'rate-limited': isRateLimited });
             }
-            metrics.failuresTotal++;
+            this.metrics.failuresTotal++;
         }
         t?.status(s);
     }
@@ -138,7 +143,7 @@ let AppController = class AppController {
             .then(async (value) => {
             if (reply)
                 this.setStatus(value.status, reply);
-            console.log(value.status, `URL (accepted) ${url}`);
+            console.log(value.status, this.requestsPerSecond, `URL (accepted) ${url}`);
             if (!value.ok) {
                 lastFailureUrl = url;
                 return 'nok';

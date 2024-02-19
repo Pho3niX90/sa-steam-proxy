@@ -10,22 +10,24 @@ let lastFailureUrl = '';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const appendQuery = require('append-query');
 
-const metrics = {
-  total: 0,
-  successTotal: 0,
-  failuresTotal: 0,
-};
-
 @Controller()
 export class AppController {
+  private rollingWindow: number[] = [];
+  private requestsPerSecond = 0;
+  metrics = {
+    total: 0,
+    successTotal: 0,
+    failuresTotal: 0,
+  };
+
   constructor(private readonly appService: AppService) {}
 
   @Cron('0 */1 * * * *')
   clearMetrics() {
     console.log(`running cron`);
-    metrics.total = 0;
-    metrics.successTotal = 0;
-    metrics.failuresTotal = 0;
+    this.metrics.total = 0;
+    this.metrics.successTotal = 0;
+    this.metrics.failuresTotal = 0;
     this.checkRateLimiting();
   }
 
@@ -36,22 +38,34 @@ export class AppController {
 
   @Get('/*')
   async doProxy(@Req() request, @Res() response) {
+    // Remove entries older than 1 minute from the rolling window
+    this.rollingWindow = this.rollingWindow.filter(
+      (timestamp) => Date.now() - timestamp < 60000,
+    );
+
+    // Add the current timestamp to the rolling window
+    this.rollingWindow.push(Date.now());
+    this.requestsPerSecond = this.rollingWindow.length;
     if (!isHealthy || isRateLimited) {
       response.headers({ 'rate-limited': isRateLimited });
       response.status(429);
       response.send('nok');
-      console.log(429, `URL (rejected) ${request.originalUrl}`);
+      console.log(
+        429,
+        this.requestsPerSecond,
+        `URL (rejected) ${request.originalUrl}`,
+      );
     } else {
       response.send(await this.doRequest(request.originalUrl, response));
     }
   }
 
   setStatus(s, t) {
-    metrics.total++;
+    this.metrics.total++;
     if (s < 400) {
       isHealthy = true;
       t.headers({ 'rate-limited': isRateLimited });
-      metrics.successTotal++;
+      this.metrics.successTotal++;
     } else {
       isHealthy = false;
       if (s == 429) {
@@ -60,7 +74,7 @@ export class AppController {
       } else {
         t.headers({ 'rate-limited': isRateLimited });
       }
-      metrics.failuresTotal++;
+      this.metrics.failuresTotal++;
     }
 
     t?.status(s);
@@ -85,7 +99,11 @@ export class AppController {
     )
       .then(async (value) => {
         if (reply) this.setStatus(value.status, reply);
-        console.log(value.status, `URL (accepted) ${url}`);
+        console.log(
+          value.status,
+          this.requestsPerSecond,
+          `URL (accepted) ${url}`,
+        );
         if (!value.ok) {
           lastFailureUrl = url;
           return 'nok';
