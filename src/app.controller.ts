@@ -40,6 +40,7 @@ export class AppController {
       response.headers({ 'rate-limited': isRateLimited });
       response.status(429);
       response.send('nok');
+      console.log(429, `URL (rejected) ${request.originalUrl}`);
     } else {
       response.send(await this.doRequest(request.originalUrl, response));
     }
@@ -84,10 +85,7 @@ export class AppController {
     )
       .then(async (value) => {
         if (reply) this.setStatus(value.status, reply);
-        console.log(
-          value.status,
-          `URL (${!value.ok ? 'rejected' : 'accepted'}) ${url}`,
-        );
+        console.log(value.status, `URL (accepted) ${url}`);
         if (!value.ok) {
           lastFailureUrl = url;
           return 'nok';
