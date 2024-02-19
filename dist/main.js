@@ -23,12 +23,13 @@ exports.AppModule = void 0;
 const common_1 = __webpack_require__(3);
 const app_controller_1 = __webpack_require__(4);
 const app_service_1 = __webpack_require__(5);
+const schedule_1 = __webpack_require__(6);
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
 exports.AppModule = AppModule = __decorate([
     (0, common_1.Module)({
-        imports: [],
+        imports: [schedule_1.ScheduleModule.forRoot()],
         controllers: [app_controller_1.AppController],
         providers: [app_service_1.AppService],
     })
@@ -67,55 +68,79 @@ const schedule_1 = __webpack_require__(6);
 const apiUrl = 'http://api.steampowered.com';
 let isHealthy = true;
 let isRateLimited = false;
+let lastFailureUrl = '';
 const appendQuery = __webpack_require__(7);
 const metrics = {
     total: 0,
     successTotal: 0,
-    failuresTotal: 0
+    failuresTotal: 0,
 };
 let AppController = class AppController {
     constructor(appService) {
         this.appService = appService;
     }
     clearMetrics() {
+        console.log(`running cron`);
         metrics.total = 0;
         metrics.successTotal = 0;
         metrics.failuresTotal = 0;
+        this.checkRateLimiting();
     }
     getHealth() {
         return isHealthy ? 'ok' : isRateLimited ? 'limit' : 'nok';
     }
     async doProxy(request, response) {
-        response.send(await this.doRequest(request.originalUrl, response));
+        if (!isHealthy || isRateLimited) {
+            response.headers({ 'rate-limited': isRateLimited });
+            response.status(429);
+            response.send('nok');
+        }
+        else {
+            response.send(await this.doRequest(request.originalUrl, response));
+        }
     }
     setStatus(s, t) {
         metrics.total++;
         if (s < 400) {
             isHealthy = true;
-            isRateLimited = false;
-            t.headers({ 'rate-limited': false });
+            t.headers({ 'rate-limited': isRateLimited });
             metrics.successTotal++;
         }
         else {
             isHealthy = false;
             if (s == 429) {
-                t.headers({ 'rate-limited': true });
                 isRateLimited = true;
+                t.headers({ 'rate-limited': isRateLimited });
             }
             else {
-                t.headers({ 'rate-limited': false });
+                t.headers({ 'rate-limited': isRateLimited });
             }
             metrics.failuresTotal++;
         }
         t?.status(s);
     }
+    async checkRateLimiting() {
+        if (lastFailureUrl !== '')
+            this.doRequest(lastFailureUrl).then((x) => {
+                if (x !== 'nok') {
+                    isRateLimited = false;
+                    lastFailureUrl = '';
+                    console.log(`rate limiting ended`);
+                }
+                else {
+                    console.log(`still rate limited`);
+                }
+            });
+    }
     async doRequest(url, reply) {
         return await fetch(appendQuery(apiUrl + url))
             .then(async (value) => {
-            this.setStatus(value.status, reply);
-            console.log(value.status, appendQuery(apiUrl + url));
-            if (!value.ok)
-                return;
+            if (reply)
+                this.setStatus(value.status, reply);
+            if (!value.ok) {
+                lastFailureUrl = url;
+                return 'nok';
+            }
             try {
                 return await value.json();
             }
@@ -126,7 +151,7 @@ let AppController = class AppController {
             .catch((e) => {
             isHealthy = false;
             console.error(e.message);
-            return '';
+            return 'nok';
         });
     }
 };
