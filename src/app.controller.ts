@@ -14,6 +14,8 @@ const appendQuery = require('append-query');
 export class AppController {
   private rollingWindow: number[] = [];
   private requestsPerSecond = 0;
+  private rateLimitCounter = 0;
+  private rateLimitNextcounter = 5;
   metrics = {
     total: 0,
     successTotal: 0,
@@ -81,14 +83,23 @@ export class AppController {
   }
 
   async checkRateLimiting() {
+    this.rateLimitCounter++;
+    if (this.rateLimitCounter < this.rateLimitNextcounter) {
+      return;
+    }
+    this.rateLimitCounter = 0;
+
     if (lastFailureUrl !== '')
       this.doRequest(lastFailureUrl).then((x) => {
         if (x !== 'nok') {
           isRateLimited = false;
           lastFailureUrl = '';
           console.log(`rate limiting ended`);
+          this.rateLimitNextcounter = 5;
+          this.rateLimitCounter = 0;
         } else {
           console.log(`still rate limited`);
+          this.rateLimitNextcounter = Math.round(this.rateLimitNextcounter * 2);
         }
       });
   }
