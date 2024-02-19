@@ -84,6 +84,7 @@ export class AppController {
     )
       .then(async (value) => {
         if (reply) this.setStatus(value.status, reply);
+        console.log(value.status, `url ${url}`);
         if (!value.ok) {
           lastFailureUrl = url;
           return 'nok';
