@@ -35,7 +35,7 @@ export class AppController {
 
   @Get('/healthz')
   getHealth() {
-    return isHealthy ? 'ok' : isRateLimited ? 'limit' : 'nok';
+    return isHealthy && !isRateLimited ? 'ok' : isRateLimited ? 'limit' : 'nok';
   }
 
   @Get('/*')
