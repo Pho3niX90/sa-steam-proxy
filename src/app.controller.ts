@@ -15,7 +15,7 @@ export class AppController {
   private rollingWindow: number[] = [];
   private requestsPerSecond = 0;
   private rateLimitCounter = 0;
-  private rateLimitNextcounter = 5;
+  private rateLimitNextCounter = 5;
   metrics = {
     total: 0,
     successTotal: 0,
@@ -35,7 +35,13 @@ export class AppController {
 
   @Get('/healthz')
   getHealth() {
-    return isHealthy && !isRateLimited ? 'ok' : isRateLimited ? 'limit' : 'nok';
+    if (isRateLimited || this.requestsPerSecond > 100) {
+      return 'limit';
+    }
+    if (isHealthy) {
+      return 'ok';
+    }
+    return 'nok';
   }
 
   @Get('/*')
@@ -50,10 +56,10 @@ export class AppController {
     this.requestsPerSecond = this.rollingWindow.length;
     if (!isHealthy || isRateLimited) {
       response.headers({ 'rate-limited': isRateLimited });
-      response.status(429);
+      response.status(isRateLimited ? 429 : 500);
       response.send('nok');
       console.log(
-        429,
+        isRateLimited ? 429 : 500,
         this.requestsPerSecond,
         `URL (rejected) ${request.originalUrl}`,
       );
@@ -75,6 +81,9 @@ export class AppController {
         t.headers({ 'rate-limited': isRateLimited });
       } else {
         t.headers({ 'rate-limited': isRateLimited });
+        setTimeout(() => {
+          isHealthy = true;
+        }, 10000);
       }
       this.metrics.failuresTotal++;
     }
@@ -83,25 +92,27 @@ export class AppController {
   }
 
   async checkRateLimiting() {
+    if (lastFailureUrl === '') {
+      return;
+    }
     this.rateLimitCounter++;
-    if (this.rateLimitCounter < this.rateLimitNextcounter) {
+    if (this.rateLimitCounter < this.rateLimitNextCounter) {
       return;
     }
     this.rateLimitCounter = 0;
 
-    if (lastFailureUrl !== '')
-      this.doRequest(lastFailureUrl).then((x) => {
-        if (x !== 'nok') {
-          isRateLimited = false;
-          lastFailureUrl = '';
-          console.log(`rate limiting ended`);
-          this.rateLimitNextcounter = 5;
-          this.rateLimitCounter = 0;
-        } else {
-          console.log(`still rate limited`);
-          this.rateLimitNextcounter = Math.round(this.rateLimitNextcounter * 2);
-        }
-      });
+    this.doRequest(lastFailureUrl).then((x) => {
+      if (x !== 'nok') {
+        isRateLimited = false;
+        lastFailureUrl = '';
+        console.log(`rate limiting ended`);
+        this.rateLimitNextCounter = 5;
+        this.rateLimitCounter = 0;
+      } else {
+        console.log(`still rate limited`);
+        this.rateLimitNextCounter = Math.round(this.rateLimitNextCounter * 2);
+      }
+    });
   }
 
   async doRequest(url, reply?) {
