@@ -80,7 +80,7 @@ let AppController = class AppController {
         this.metrics = {
             total: 0,
             successTotal: 0,
-            failuresTotal: 0,
+            failuresTotal: 0
         };
     }
     clearMetrics() {
@@ -94,16 +94,13 @@ let AppController = class AppController {
         if (isRateLimited || this.requestsPerSecond > 100) {
             return 'limit';
         }
-        if (isHealthy) {
-            return 'ok';
-        }
-        return 'nok';
+        return isHealthy ? 'ok' : 'nok';
     }
     async doProxy(request, response) {
         this.rollingWindow = this.rollingWindow.filter((timestamp) => Date.now() - timestamp < 60000);
         this.rollingWindow.push(Date.now());
         this.requestsPerSecond = this.rollingWindow.length;
-        if (!isHealthy || isRateLimited) {
+        if (isRateLimited) {
             response.headers({ 'rate-limited': isRateLimited });
             response.status(isRateLimited ? 429 : 500);
             response.send('nok');

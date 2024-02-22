@@ -19,10 +19,11 @@ export class AppController {
   metrics = {
     total: 0,
     successTotal: 0,
-    failuresTotal: 0,
+    failuresTotal: 0
   };
 
-  constructor(private readonly appService: AppService) {}
+  constructor(private readonly appService: AppService) {
+  }
 
   @Cron('0 */1 * * * *')
   clearMetrics() {
@@ -38,30 +39,27 @@ export class AppController {
     if (isRateLimited || this.requestsPerSecond > 100) {
       return 'limit';
     }
-    if (isHealthy) {
-      return 'ok';
-    }
-    return 'nok';
+    return isHealthy ? 'ok' : 'nok';
   }
 
   @Get('/*')
   async doProxy(@Req() request, @Res() response) {
     // Remove entries older than 1 minute from the rolling window
     this.rollingWindow = this.rollingWindow.filter(
-      (timestamp) => Date.now() - timestamp < 60000,
+      (timestamp) => Date.now() - timestamp < 60000
     );
 
     // Add the current timestamp to the rolling window
     this.rollingWindow.push(Date.now());
     this.requestsPerSecond = this.rollingWindow.length;
-    if (!isHealthy || isRateLimited) {
+    if (isRateLimited) {
       response.headers({ 'rate-limited': isRateLimited });
       response.status(isRateLimited ? 429 : 500);
       response.send('nok');
       console.log(
         isRateLimited ? 429 : 500,
         this.requestsPerSecond,
-        `URL (rejected) ${request.originalUrl}`,
+        `URL (rejected) ${request.originalUrl}`
       );
     } else {
       response.send(await this.doRequest(request.originalUrl, response));
@@ -117,14 +115,14 @@ export class AppController {
 
   async doRequest(url, reply?) {
     return await fetch(
-      appendQuery(apiUrl + url /*, { key: this.checkKeyInHostname() }*/),
+      appendQuery(apiUrl + url /*, { key: this.checkKeyInHostname() }*/)
     )
       .then(async (value) => {
         if (reply) this.setStatus(value.status, reply);
         console.log(
           value.status,
           this.requestsPerSecond,
-          `URL (accepted) ${url}`,
+          `URL (accepted) ${url}`
         );
         if (!value.ok) {
           lastFailureUrl = url;
