@@ -12,7 +12,7 @@ const appendQuery = require('append-query');
 @Controller()
 export class AppController {
   private rollingWindow: number[] = [];
-  private requestsPerSecond = 0;
+  private requestsPerMinute = 0;
   private rateLimitCounter = 0;
   private rateLimitNextCounter = 5;
   metrics = {
@@ -39,7 +39,7 @@ export class AppController {
 
   @Get('/healthz')
   getHealth() {
-    if (isRateLimited || this.requestsPerSecond > 100) {
+    if (isRateLimited || this.requestsPerMinute > 100) {
       return 'limit';
     }
     return isHealthy ? 'ok' : 'nok';
@@ -59,14 +59,14 @@ export class AppController {
 
     // Add the current timestamp to the rolling window
     this.rollingWindow.push(Date.now());
-    this.requestsPerSecond = this.rollingWindow.length;
+    this.requestsPerMinute = this.rollingWindow.length;
     if (isRateLimited) {
       response.headers({ 'rate-limited': isRateLimited });
       response.status(isRateLimited ? 429 : 500);
       response.send('nok');
       console.log(
         isRateLimited ? 429 : 500,
-        this.requestsPerSecond,
+        this.requestsPerMinute,
         `URL (rejected) ${request.originalUrl}`
       );
     } else {
@@ -129,7 +129,7 @@ export class AppController {
         if (reply) this.setStatus(value.status, reply);
         console.log(
           value.status,
-          this.requestsPerSecond,
+          this.requestsPerMinute,
           `URL (accepted) ${url}`
         );
         if (!value.ok) {

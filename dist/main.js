@@ -70,7 +70,7 @@ const appendQuery = __webpack_require__(6);
 let AppController = class AppController {
     constructor() {
         this.rollingWindow = [];
-        this.requestsPerSecond = 0;
+        this.requestsPerMinute = 0;
         this.rateLimitCounter = 0;
         this.rateLimitNextCounter = 5;
         this.metrics = {
@@ -89,7 +89,7 @@ let AppController = class AppController {
         this.checkRateLimiting();
     }
     getHealth() {
-        if (isRateLimited || this.requestsPerSecond > 100) {
+        if (isRateLimited || this.requestsPerMinute > 100) {
             return 'limit';
         }
         return isHealthy ? 'ok' : 'nok';
@@ -100,12 +100,12 @@ let AppController = class AppController {
     async doProxy(request, response) {
         this.rollingWindow = this.rollingWindow.filter((timestamp) => Date.now() - timestamp < 60000);
         this.rollingWindow.push(Date.now());
-        this.requestsPerSecond = this.rollingWindow.length;
+        this.requestsPerMinute = this.rollingWindow.length;
         if (isRateLimited) {
             response.headers({ 'rate-limited': isRateLimited });
             response.status(isRateLimited ? 429 : 500);
             response.send('nok');
-            console.log(isRateLimited ? 429 : 500, this.requestsPerSecond, `URL (rejected) ${request.originalUrl}`);
+            console.log(isRateLimited ? 429 : 500, this.requestsPerMinute, `URL (rejected) ${request.originalUrl}`);
         }
         else {
             response.send(await this.doRequest(request.originalUrl, response));
@@ -162,7 +162,7 @@ let AppController = class AppController {
             .then(async (value) => {
             if (reply)
                 this.setStatus(value.status, reply);
-            console.log(value.status, this.requestsPerSecond, `URL (accepted) ${url}`);
+            console.log(value.status, this.requestsPerMinute, `URL (accepted) ${url}`);
             if (!value.ok) {
                 lastFailureUrl = url;
                 return 'nok';
