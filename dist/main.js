@@ -80,12 +80,13 @@ let AppController = class AppController {
         };
     }
     cronClearMetrics() {
-        console.debug(`running cron`);
+        console.debug(`CRON: Midnight`);
         this.metrics.total = 0;
         this.metrics.successTotal = 0;
         this.metrics.failuresTotal = 0;
     }
     cronCheckRateLimiting() {
+        console.debug(`CRON: Rate Limit Checking`);
         this.checkRateLimiting();
     }
     getHealth() {

@@ -26,7 +26,7 @@ export class AppController {
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   cronClearMetrics() {
-    console.debug(`running cron`);
+    console.debug(`CRON: Midnight`);
     this.metrics.total = 0;
     this.metrics.successTotal = 0;
     this.metrics.failuresTotal = 0;
@@ -34,6 +34,7 @@ export class AppController {
 
   @Cron(CronExpression.EVERY_5_MINUTES)
   cronCheckRateLimiting() {
+    console.debug(`CRON: Rate Limit Checking`);
     this.checkRateLimiting();
   }
 
