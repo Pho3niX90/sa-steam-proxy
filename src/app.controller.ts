@@ -1,6 +1,6 @@
 import { Controller, Get, Req, Res } from '@nestjs/common';
 import { AppService } from './app.service';
-import { Cron } from '@nestjs/schedule';
+import { Cron, CronExpression } from '@nestjs/schedule';
 
 const apiUrl = 'http://api.steampowered.com';
 let isHealthy = true;
@@ -25,9 +25,9 @@ export class AppController {
   constructor(private readonly appService: AppService) {
   }
 
-  @Cron('0 */1 * * * *')
+  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   clearMetrics() {
-    console.log(`running cron`);
+    console.debug(`running cron`);
     this.metrics.total = 0;
     this.metrics.successTotal = 0;
     this.metrics.failuresTotal = 0;
@@ -40,6 +40,11 @@ export class AppController {
       return 'limit';
     }
     return isHealthy ? 'ok' : 'nok';
+  }
+
+  @Get('/metrics')
+  getMetrics() {
+    return {...this.metrics}
   }
 
   @Get('/*')

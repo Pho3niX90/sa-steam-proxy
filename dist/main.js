@@ -84,7 +84,7 @@ let AppController = class AppController {
         };
     }
     clearMetrics() {
-        console.log(`running cron`);
+        console.debug(`running cron`);
         this.metrics.total = 0;
         this.metrics.successTotal = 0;
         this.metrics.failuresTotal = 0;
@@ -95,6 +95,9 @@ let AppController = class AppController {
             return 'limit';
         }
         return isHealthy ? 'ok' : 'nok';
+    }
+    getMetrics() {
+        return { ...this.metrics };
     }
     async doProxy(request, response) {
         this.rollingWindow = this.rollingWindow.filter((timestamp) => Date.now() - timestamp < 60000);
@@ -182,7 +185,7 @@ let AppController = class AppController {
 };
 exports.AppController = AppController;
 __decorate([
-    (0, schedule_1.Cron)('0 */1 * * * *'),
+    (0, schedule_1.Cron)(schedule_1.CronExpression.EVERY_DAY_AT_MIDNIGHT),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", void 0)
@@ -193,6 +196,12 @@ __decorate([
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", void 0)
 ], AppController.prototype, "getHealth", null);
+__decorate([
+    (0, common_1.Get)('/metrics'),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", void 0)
+], AppController.prototype, "getMetrics", null);
 __decorate([
     (0, common_1.Get)('/*'),
     __param(0, (0, common_1.Req)()),
