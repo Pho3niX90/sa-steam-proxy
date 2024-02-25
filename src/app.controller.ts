@@ -1,5 +1,4 @@
 import { Controller, Get, Req, Res } from '@nestjs/common';
-import { AppService } from './app.service';
 import { Cron, CronExpression } from '@nestjs/schedule';
 
 const apiUrl = 'http://api.steampowered.com';
@@ -22,7 +21,7 @@ export class AppController {
     failuresTotal: 0
   };
 
-  constructor(private readonly appService: AppService) {
+  constructor() {
   }
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
