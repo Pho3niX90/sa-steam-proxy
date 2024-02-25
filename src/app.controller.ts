@@ -26,11 +26,15 @@ export class AppController {
   }
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
-  clearMetrics() {
+  cronClearMetrics() {
     console.debug(`running cron`);
     this.metrics.total = 0;
     this.metrics.successTotal = 0;
     this.metrics.failuresTotal = 0;
+  }
+
+  @Cron(CronExpression.EVERY_5_MINUTES)
+  cronCheckRateLimiting() {
     this.checkRateLimiting();
   }
 
@@ -44,7 +48,7 @@ export class AppController {
 
   @Get('/metrics')
   getMetrics() {
-    return {...this.metrics}
+    return { ...this.metrics };
   }
 
   @Get('/*')
