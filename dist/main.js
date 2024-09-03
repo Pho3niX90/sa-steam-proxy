@@ -84,6 +84,11 @@ let AppController = class AppController {
         this.metrics.total = 0;
         this.metrics.successTotal = 0;
         this.metrics.failuresTotal = 0;
+        try {
+            process.exit();
+        }
+        catch (e) {
+        }
     }
     cronCheckRateLimiting() {
         console.debug(`CRON: Rate Limit Checking`);
@@ -136,7 +141,12 @@ let AppController = class AppController {
         t?.status(s);
     }
     async checkRateLimiting() {
+        if (!isRateLimited) {
+            console.log(`not rate limited.`);
+            return;
+        }
         if (lastFailureUrl === '') {
+            console.log(`not rate limited.`);
             return;
         }
         this.rateLimitCounter++;
@@ -172,7 +182,7 @@ let AppController = class AppController {
                 return await value.json();
             }
             catch (e) {
-                return await value.body;
+                return value.body;
             }
         })
             .catch((e) => {

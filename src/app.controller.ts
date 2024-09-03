@@ -30,6 +30,11 @@ export class AppController {
     this.metrics.total = 0;
     this.metrics.successTotal = 0;
     this.metrics.failuresTotal = 0;
+    try {
+      process.exit()
+    } catch (e) {
+      
+    }
   }
 
   @Cron(CronExpression.EVERY_5_MINUTES)
@@ -99,7 +104,12 @@ export class AppController {
   }
 
   async checkRateLimiting() {
+    if(!isRateLimited) {
+      console.log(`not rate limited.`)
+      return;
+    }
     if (lastFailureUrl === '') {
+      console.log(`not rate limited.`)
       return;
     }
     this.rateLimitCounter++;
@@ -140,7 +150,7 @@ export class AppController {
         try {
           return await value.json();
         } catch (e) {
-          return await value.body;
+          return value.body;
         }
       })
       .catch((e) => {
