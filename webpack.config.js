@@ -1,3 +1,4 @@
+/*
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const path = require('path');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -66,3 +67,4 @@ module.exports = {
     path: path.resolve(__dirname, 'prod'),
   },
 };
+*/

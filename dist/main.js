@@ -1,8 +1,14 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	"use strict";
-/******/ 	var __webpack_modules__ = ({
+/******/ 	var __webpack_modules__ = ([
+/* 0 */,
+/* 1 */
+/***/ ((module) => {
 
-/***/ 205:
+module.exports = require("@nestjs/core");
+
+/***/ }),
+/* 2 */
 /***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
 
@@ -14,10 +20,10 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.AppModule = void 0;
-const common_1 = __webpack_require__(563);
-const app_controller_1 = __webpack_require__(509);
-const schedule_1 = __webpack_require__(959);
-const steam_proxy_service_1 = __webpack_require__(320);
+const common_1 = __webpack_require__(3);
+const app_controller_1 = __webpack_require__(4);
+const schedule_1 = __webpack_require__(5);
+const steam_proxy_service_1 = __webpack_require__(7);
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -31,15 +37,128 @@ exports.AppModule = AppModule = __decorate([
 
 
 /***/ }),
-
-/***/ 237:
+/* 3 */
 /***/ ((module) => {
 
-module.exports = require("append-query");
+module.exports = require("@nestjs/common");
 
 /***/ }),
+/* 4 */
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
-/***/ 320:
+
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
+var __param = (this && this.__param) || function (paramIndex, decorator) {
+    return function (target, key) { decorator(target, key, paramIndex); }
+};
+var _a, _b, _c, _d;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.AppController = void 0;
+const common_1 = __webpack_require__(3);
+const schedule_1 = __webpack_require__(5);
+const express_1 = __webpack_require__(6);
+const steam_proxy_service_1 = __webpack_require__(7);
+let AppController = class AppController {
+    constructor(steamProxy) {
+        this.steamProxy = steamProxy;
+    }
+    getHealth(res) {
+        const health = this.steamProxy.healthStatus;
+        res
+            .status(health.rateLimited ? 429 : 200)
+            .set({
+            'X-RateLimit-Status': health.rateLimited ? 'limited' : 'ok',
+            'X-Requests-Per-Minute': health.requestsPerMinute.toString(),
+            'X-Backoff': health.backoff.toString(),
+            'X-Retry-In': health.retryIn.toString(),
+        })
+            .send(health.rateLimited ? 'limit' : 'ok');
+    }
+    getMetrics() {
+        return this.steamProxy.getMetrics();
+    }
+    async proxy(req, res) {
+        const result = await this.steamProxy.proxy(req.originalUrl);
+        if (result?.error) {
+            res
+                .status(result.error === 'rate_limited' ? 429 : 500)
+                .set('X-RateLimit-Status', 'limited')
+                .send(result.error);
+        }
+        else {
+            res.status(200).send(result);
+        }
+    }
+    checkRateLimit() {
+        this.steamProxy.checkRateLimiting();
+    }
+    restart() {
+        console.log('[CRON] Midnight restart');
+        process.exit();
+    }
+};
+exports.AppController = AppController;
+__decorate([
+    (0, common_1.Get)('/healthz'),
+    __param(0, (0, common_1.Res)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [typeof (_b = typeof express_1.Response !== "undefined" && express_1.Response) === "function" ? _b : Object]),
+    __metadata("design:returntype", void 0)
+], AppController.prototype, "getHealth", null);
+__decorate([
+    (0, common_1.Get)('/metrics'),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", void 0)
+], AppController.prototype, "getMetrics", null);
+__decorate([
+    (0, common_1.Get)('/*'),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Res)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [typeof (_c = typeof express_1.Request !== "undefined" && express_1.Request) === "function" ? _c : Object, typeof (_d = typeof express_1.Response !== "undefined" && express_1.Response) === "function" ? _d : Object]),
+    __metadata("design:returntype", Promise)
+], AppController.prototype, "proxy", null);
+__decorate([
+    (0, schedule_1.Cron)(schedule_1.CronExpression.EVERY_5_MINUTES),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", void 0)
+], AppController.prototype, "checkRateLimit", null);
+__decorate([
+    (0, schedule_1.Cron)(schedule_1.CronExpression.EVERY_DAY_AT_MIDNIGHT),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", void 0)
+], AppController.prototype, "restart", null);
+exports.AppController = AppController = __decorate([
+    (0, common_1.Controller)(),
+    __metadata("design:paramtypes", [typeof (_a = typeof steam_proxy_service_1.SteamProxyService !== "undefined" && steam_proxy_service_1.SteamProxyService) === "function" ? _a : Object])
+], AppController);
+
+
+/***/ }),
+/* 5 */
+/***/ ((module) => {
+
+module.exports = require("@nestjs/schedule");
+
+/***/ }),
+/* 6 */
+/***/ ((module) => {
+
+module.exports = require("express");
+
+/***/ }),
+/* 7 */
 /***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
 
@@ -55,9 +174,9 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var SteamProxyService_1;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SteamProxyService = void 0;
-const common_1 = __webpack_require__(563);
-const undici_1 = __webpack_require__(956);
-const append_query_1 = __webpack_require__(237);
+const common_1 = __webpack_require__(3);
+const undici_1 = __webpack_require__(8);
+const append_query_1 = __webpack_require__(9);
 const STEAM_API_HOST = 'http://api.steampowered.com';
 const SAFE_PROBE_PATH = '/ISteamWebAPIUtil/GetServerInfo/v0001/';
 const CACHE_TTL_MS = 10_000;
@@ -213,145 +332,25 @@ exports.SteamProxyService = SteamProxyService = SteamProxyService_1 = __decorate
 
 
 /***/ }),
-
-/***/ 509:
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
-
-
-var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
-    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
-    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
-    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
-    return c > 3 && r && Object.defineProperty(target, key, r), r;
-};
-var __metadata = (this && this.__metadata) || function (k, v) {
-    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
-};
-var __param = (this && this.__param) || function (paramIndex, decorator) {
-    return function (target, key) { decorator(target, key, paramIndex); }
-};
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.AppController = void 0;
-const common_1 = __webpack_require__(563);
-const schedule_1 = __webpack_require__(959);
-const steam_proxy_service_1 = __webpack_require__(320);
-let AppController = class AppController {
-    constructor(steamProxy) {
-        this.steamProxy = steamProxy;
-    }
-    getHealth(res) {
-        const health = this.steamProxy.healthStatus;
-        res
-            .status(health.rateLimited ? 429 : 200)
-            .set({
-            'X-RateLimit-Status': health.rateLimited ? 'limited' : 'ok',
-            'X-Requests-Per-Minute': health.requestsPerMinute.toString(),
-            'X-Backoff': health.backoff.toString(),
-            'X-Retry-In': health.retryIn.toString(),
-        })
-            .send(health.rateLimited ? 'limit' : 'ok');
-    }
-    getMetrics() {
-        return this.steamProxy.getMetrics();
-    }
-    async proxy(req, res) {
-        const result = await this.steamProxy.proxy(req.originalUrl);
-        if (result?.error) {
-            res
-                .status(result.error === 'rate_limited' ? 429 : 500)
-                .set('X-RateLimit-Status', 'limited')
-                .send(result.error);
-        }
-        else {
-            res.status(200).send(result);
-        }
-    }
-    checkRateLimit() {
-        this.steamProxy.checkRateLimiting();
-    }
-    restart() {
-        console.log('[CRON] Midnight restart');
-        process.exit();
-    }
-};
-exports.AppController = AppController;
-__decorate([
-    (0, common_1.Get)('/healthz'),
-    __param(0, (0, common_1.Res)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object]),
-    __metadata("design:returntype", void 0)
-], AppController.prototype, "getHealth", null);
-__decorate([
-    (0, common_1.Get)('/metrics'),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", []),
-    __metadata("design:returntype", void 0)
-], AppController.prototype, "getMetrics", null);
-__decorate([
-    (0, common_1.Get)('/*'),
-    __param(0, (0, common_1.Req)()),
-    __param(1, (0, common_1.Res)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, Object]),
-    __metadata("design:returntype", Promise)
-], AppController.prototype, "proxy", null);
-__decorate([
-    (0, schedule_1.Cron)(schedule_1.CronExpression.EVERY_5_MINUTES),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", []),
-    __metadata("design:returntype", void 0)
-], AppController.prototype, "checkRateLimit", null);
-__decorate([
-    (0, schedule_1.Cron)(schedule_1.CronExpression.EVERY_DAY_AT_MIDNIGHT),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", []),
-    __metadata("design:returntype", void 0)
-], AppController.prototype, "restart", null);
-exports.AppController = AppController = __decorate([
-    (0, common_1.Controller)(),
-    __metadata("design:paramtypes", [steam_proxy_service_1.SteamProxyService])
-], AppController);
-
-
-/***/ }),
-
-/***/ 560:
-/***/ ((module) => {
-
-module.exports = require("@nestjs/platform-fastify");
-
-/***/ }),
-
-/***/ 563:
-/***/ ((module) => {
-
-module.exports = require("@nestjs/common");
-
-/***/ }),
-
-/***/ 781:
-/***/ ((module) => {
-
-module.exports = require("@nestjs/core");
-
-/***/ }),
-
-/***/ 956:
+/* 8 */
 /***/ ((module) => {
 
 module.exports = require("undici");
 
 /***/ }),
-
-/***/ 959:
+/* 9 */
 /***/ ((module) => {
 
-module.exports = require("@nestjs/schedule");
+module.exports = require("append-query");
+
+/***/ }),
+/* 10 */
+/***/ ((module) => {
+
+module.exports = require("@nestjs/platform-fastify");
 
 /***/ })
-
-/******/ 	});
+/******/ 	]);
 /************************************************************************/
 /******/ 	// The module cache
 /******/ 	var __webpack_module_cache__ = {};
@@ -379,15 +378,14 @@ module.exports = require("@nestjs/schedule");
 /******/ 	
 /************************************************************************/
 var __webpack_exports__ = {};
-// This entry needs to be wrapped in an IIFE because it uses a non-standard name for the exports (exports).
+// This entry needs to be wrapped in an IIFE because it needs to be isolated against other modules in the chunk.
 (() => {
 var exports = __webpack_exports__;
-var __webpack_unused_export__;
 
-__webpack_unused_export__ = ({ value: true });
-const core_1 = __webpack_require__(781);
-const app_module_1 = __webpack_require__(205);
-const platform_fastify_1 = __webpack_require__(560);
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const core_1 = __webpack_require__(1);
+const app_module_1 = __webpack_require__(2);
+const platform_fastify_1 = __webpack_require__(10);
 async function bootstrap() {
     const app = await core_1.NestFactory.create(app_module_1.AppModule, new platform_fastify_1.FastifyAdapter());
     await app.listen(8080, '0.0.0.0');
@@ -398,4 +396,3 @@ bootstrap();
 
 /******/ })()
 ;
-//# sourceMappingURL=server.js.map
