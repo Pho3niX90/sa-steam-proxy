@@ -250,19 +250,20 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
             });
             const duration = Date.now() - start;
             this.metrics.lastDurationMs = duration;
-            const { statusCode, body } = result;
+            const { statusCode, headers, body } = result;
             let data;
             try {
-                data = await body.json();
-            }
-            catch (jsonErr) {
-                try {
+                const contentType = headers['content-type'] || '';
+                if (contentType.includes('application/json')) {
+                    data = await body.json();
+                }
+                else {
                     data = await body.text();
                 }
-                catch (textErr) {
-                    this.logger.error(`Steam body parse error: ${textErr.message}`);
-                    data = null;
-                }
+            }
+            catch (err) {
+                this.logger.error(`Steam body read error: ${err.message}`);
+                data = null;
             }
             if (statusCode === 429) {
                 this.handleRateLimit(originalPath);

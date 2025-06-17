@@ -67,7 +67,6 @@ export class SteamProxyService {
     const cacheKey = fullPath;
     const now = Date.now();
 
-    // Fast path: cached result
     const cached = this.cache.get(cacheKey);
     if (cached && cached.expires > now && !this.isRateLimited) {
       this.logger.debug(`Cache HIT: ${originalPath}`);
@@ -93,21 +92,21 @@ export class SteamProxyService {
       const duration = Date.now() - start;
       this.metrics.lastDurationMs = duration;
 
-      const { statusCode, body } = result;
+      const { statusCode, headers, body } = result;
 
       let data: any;
       try {
-        data = await body.json();
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      } catch (jsonErr) {
-        try {
-          data = await body.text(); // fallback to text only if JSON fails
-        } catch (textErr) {
-          this.logger.error(`Steam body parse error: ${textErr.message}`);
-          data = null;
-        }
-      }
+        const contentType = headers['content-type'] || '';
 
+        if (contentType.includes('application/json')) {
+          data = await body.json(); // ✅ only once
+        } else {
+          data = await body.text(); // ✅ fallback to plain text or HTML
+        }
+      } catch (err) {
+        this.logger.error(`Steam body read error: ${err.message}`);
+        data = null;
+      }
 
       if (statusCode === 429) {
         this.handleRateLimit(originalPath);
