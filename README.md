@@ -1,73 +1,121 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="200" alt="Nest Logo" /></a>
-</p>
+# Steam API Proxy Service
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+A **high-performance**, **rate-limit-aware** proxy service for the [Steam Web API](https://partner.steamgames.com/doc/webapi), built using **NestJS** and **Fastify**, powered by **undici**.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://coveralls.io/github/nestjs/nest?branch=master" target="_blank"><img src="https://coveralls.io/repos/github/nestjs/nest/badge.svg?branch=master#9" alt="Coverage" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+---
 
-## Description
+## 🚀 Features
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+- ⚡ **Efficient Proxying** – Forwards requests with minimal overhead
+- 🧠 **Caching** – 10-second in-memory cache to reduce Steam load
+- 🛡️ **Rate Limit Protection** – Detects `429` responses and handles gracefully
+- 🔁 **Adaptive Backoff** – Exponential delay between retries after rate-limiting
+- ❤️ **Health Monitoring** – `/healthz` and `/metrics` endpoints for liveness and diagnostics
+- 🧵 **High Performance** – Uses Fastify and `undici.Pool` for ultra-low latency
+- ♻️ **Automatic Recovery** – Periodically probes Steam to detect rate-limit lift
+- 🕛 **Scheduled Restart** – Optional daily restart at midnight to ensure stability
 
-## Installation
+---
+
+## 📦 Installation
 
 ```bash
-$ npm install
+npm install
 ```
 
-## Running the app
+---
+
+## ▶️ Running the Application
 
 ```bash
-# development
-$ npm run start
+# Development mode
+npm run start
 
-# watch mode
-$ npm run start:dev
+# Watch mode (auto-reload on changes)
+npm run start:dev
 
-# production mode
-$ npm run start:prod
+# Production mode
+npm run start:prod
 ```
 
-## Test
+The service listens on **port 8080** by default.
 
-```bash
-# unit tests
-$ npm run test
+---
 
-# e2e tests
-$ npm run test:e2e
+## 🌐 API Endpoints
 
-# test coverage
-$ npm run test:cov
+### 🔄 Steam Proxy
+
+All unmatched paths are forwarded directly to the Steam API:
+
+```
+GET /*  →  http://api.steampowered.com/*
 ```
 
-## Support
+#### Example:
+```
+GET /ISteamUser/GetPlayerSummaries/v0002/?key=YOURKEY&steamids=76561197960435530
+```
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+---
 
-## Stay in touch
+### ❤️ Health Check
 
-- Author - [Kamil Myśliwiec](https://kamilmysliwiec.com)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+```
+GET /healthz
+```
 
-## License
+Returns:
+- `200 OK` – Healthy
+- `429 Too Many Requests` – Currently rate-limited
 
-Nest is [MIT licensed](LICENSE).
+Headers:
+- `X-RateLimit-Status`: `"ok"` or `"limited"`
+- `X-Requests-Per-Minute`: Recent request volume
+- `X-Backoff`: Current backoff duration in seconds
+- `X-Retry-In`: Time until next rate-limit check
+
+---
+
+### 📊 Metrics
+
+```
+GET /metrics
+```
+
+Returns JSON with:
+
+```json
+{
+  "total": 543,
+  "success": 521,
+  "failure": 22,
+  "lastDurationMs": 118
+}
+```
+
+---
+
+## ⚙️ Configuration
+
+Constants in `steam-proxy.service.ts`:
+
+| Name             | Description                           | Default                         |
+|------------------|---------------------------------------|---------------------------------|
+| `STEAM_API_HOST` | Steam API base URL                    | `'http://api.steampowered.com'` |
+| `CACHE_TTL_MS`   | Response cache time-to-live (in ms)   | `10000`                         |
+| `ONE_MINUTE`     | Time window for rate tracking (in ms) | `60000`                         |
+
+---
+
+## 📝 License
+
+This project is [MIT licensed](LICENSE).
+
+---
+
+## 📌 Tips
+
+- Use a reverse proxy like **Nginx** or **Cloudflare Tunnel** for TLS and access control.
+- Deploy behind a **Kubernetes HPA** or **PM2 cluster mode** if under high traffic.
+- Monitor rate-limiting via `/healthz` or logs tagged with `[RateLimit]`.

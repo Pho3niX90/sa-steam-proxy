@@ -1,5 +1,8 @@
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const path = require('path');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const webpack = require('webpack');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { CleanWebpackPlugin } = require('clean-webpack-plugin');
 
 const WebPackIgnorePlugin = {
