@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Pool } from 'undici';
-import appendQuery from 'append-query';
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const appendQuery = require('append-query');
 const STEAM_API_HOST = 'http://api.steampowered.com';
 const SAFE_PROBE_PATH = '/ISteamWebAPIUtil/GetServerInfo/v0001/';
 const CACHE_TTL_MS = 10_000;

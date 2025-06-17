@@ -183,7 +183,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SteamProxyService = void 0;
 const common_1 = __webpack_require__(3);
 const undici_1 = __webpack_require__(9);
-const append_query_1 = __webpack_require__(10);
+const appendQuery = __webpack_require__(10);
 const STEAM_API_HOST = 'http://api.steampowered.com';
 const SAFE_PROBE_PATH = '/ISteamWebAPIUtil/GetServerInfo/v0001/';
 const CACHE_TTL_MS = 10_000;
@@ -227,7 +227,7 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
         this.cleanupOldRequests();
         this.requestTimestamps.push(Date.now());
         this.metrics.total++;
-        const fullPath = (0, append_query_1.default)(originalPath);
+        const fullPath = appendQuery(originalPath);
         const cacheKey = fullPath;
         const now = Date.now();
         const cached = this.cache.get(cacheKey);
