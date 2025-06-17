@@ -251,7 +251,19 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
             const duration = Date.now() - start;
             this.metrics.lastDurationMs = duration;
             const { statusCode, body } = result;
-            const data = await body.json().catch(() => body.text());
+            let data;
+            try {
+                data = await body.json();
+            }
+            catch (jsonErr) {
+                try {
+                    data = await body.text();
+                }
+                catch (textErr) {
+                    this.logger.error(`Steam body parse error: ${textErr.message}`);
+                    data = null;
+                }
+            }
             if (statusCode === 429) {
                 this.handleRateLimit(originalPath);
                 return { error: 'rate_limited' };
