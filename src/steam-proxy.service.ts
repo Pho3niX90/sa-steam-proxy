@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Pool } from 'undici';
+import { gunzipSync } from 'zlib';
+import { Buffer } from 'buffer';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const appendQuery = require('append-query');
@@ -96,12 +98,32 @@ export class SteamProxyService {
 
       let data: any;
       try {
+        const contentEncoding = headers['content-encoding'] || '';
         const contentType = headers['content-type'] || '';
 
-        if (contentType.includes('application/json')) {
-          data = await body.json(); // ✅ only once
+        const rawBuffer = await body.arrayBuffer();
+        let raw = Buffer.from(rawBuffer);
+
+        if (contentEncoding.includes('gzip')) {
+          try {
+            raw = gunzipSync(raw);
+          } catch (decompErr) {
+            this.logger.error(`Decompression failed: ${decompErr.message}`);
+            return { error: 'decompression_failed' };
+          }
+        }
+
+        const rawText = raw.toString('utf-8');
+
+        if (contentType.includes('application/json') && rawText.trim() !== '') {
+          try {
+            data = JSON.parse(rawText);
+          } catch {
+            this.logger.warn(`Failed to parse JSON. Raw body: ${rawText}`);
+            data = rawText;
+          }
         } else {
-          data = await body.text(); // ✅ fallback to plain text or HTML
+          data = rawText;
         }
       } catch (err) {
         this.logger.error(`Steam body read error: ${err.message}`);

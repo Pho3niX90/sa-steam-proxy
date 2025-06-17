@@ -183,7 +183,9 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SteamProxyService = void 0;
 const common_1 = __webpack_require__(3);
 const undici_1 = __webpack_require__(9);
-const appendQuery = __webpack_require__(10);
+const zlib_1 = __webpack_require__(10);
+const buffer_1 = __webpack_require__(11);
+const appendQuery = __webpack_require__(12);
 const STEAM_API_HOST = 'http://api.steampowered.com';
 const SAFE_PROBE_PATH = '/ISteamWebAPIUtil/GetServerInfo/v0001/';
 const CACHE_TTL_MS = 10_000;
@@ -253,12 +255,31 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
             const { statusCode, headers, body } = result;
             let data;
             try {
+                const contentEncoding = headers['content-encoding'] || '';
                 const contentType = headers['content-type'] || '';
-                if (contentType.includes('application/json')) {
-                    data = await body.json();
+                const rawBuffer = await body.arrayBuffer();
+                let raw = buffer_1.Buffer.from(rawBuffer);
+                if (contentEncoding.includes('gzip')) {
+                    try {
+                        raw = (0, zlib_1.gunzipSync)(raw);
+                    }
+                    catch (decompErr) {
+                        this.logger.error(`Decompression failed: ${decompErr.message}`);
+                        return { error: 'decompression_failed' };
+                    }
+                }
+                const rawText = raw.toString('utf-8');
+                if (contentType.includes('application/json') && rawText.trim() !== '') {
+                    try {
+                        data = JSON.parse(rawText);
+                    }
+                    catch {
+                        this.logger.warn(`Failed to parse JSON. Raw body: ${rawText}`);
+                        data = rawText;
+                    }
                 }
                 else {
-                    data = await body.text();
+                    data = rawText;
                 }
             }
             catch (err) {
@@ -361,10 +382,22 @@ module.exports = require("undici");
 /* 10 */
 /***/ ((module) => {
 
-module.exports = require("append-query");
+module.exports = require("zlib");
 
 /***/ }),
 /* 11 */
+/***/ ((module) => {
+
+module.exports = require("buffer");
+
+/***/ }),
+/* 12 */
+/***/ ((module) => {
+
+module.exports = require("append-query");
+
+/***/ }),
+/* 13 */
 /***/ ((module) => {
 
 module.exports = require("@nestjs/platform-fastify");
@@ -405,7 +438,7 @@ var exports = __webpack_exports__;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core_1 = __webpack_require__(1);
 const app_module_1 = __webpack_require__(2);
-const platform_fastify_1 = __webpack_require__(11);
+const platform_fastify_1 = __webpack_require__(13);
 async function bootstrap() {
     const app = await core_1.NestFactory.create(app_module_1.AppModule, new platform_fastify_1.FastifyAdapter());
     await app.listen(8080, '0.0.0.0');
