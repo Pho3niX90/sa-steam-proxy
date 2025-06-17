@@ -95,7 +95,19 @@ export class SteamProxyService {
 
       const { statusCode, body } = result;
 
-      const data = await body.json().catch(() => body.text());
+      let data: any;
+      try {
+        data = await body.json();
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      } catch (jsonErr) {
+        try {
+          data = await body.text(); // fallback to text only if JSON fails
+        } catch (textErr) {
+          this.logger.error(`Steam body parse error: ${textErr.message}`);
+          data = null;
+        }
+      }
+
 
       if (statusCode === 429) {
         this.handleRateLimit(originalPath);
