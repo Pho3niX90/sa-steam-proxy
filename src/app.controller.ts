@@ -1,6 +1,7 @@
 import { Controller, Get, Req, Res } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { Request, Response } from 'express';
+import { Request } from 'express';
+import { FastifyReply } from 'fastify';
 import { SteamProxyService } from './steam-proxy.service';
 
 @Controller()
@@ -8,11 +9,11 @@ export class AppController {
   constructor(private readonly steamProxy: SteamProxyService) {}
 
   @Get('/healthz')
-  getHealth(@Res() res: Response) {
+  getHealth(@Res() res: FastifyReply) {
     const health = this.steamProxy.healthStatus;
     res
       .status(health.rateLimited ? 429 : 200)
-      .set({
+      .headers({
         'X-RateLimit-Status': health.rateLimited ? 'limited' : 'ok',
         'X-Requests-Per-Minute': health.requestsPerMinute.toString(),
         'X-Backoff': health.backoff.toString(),
@@ -27,12 +28,12 @@ export class AppController {
   }
 
   @Get('/*')
-  async proxy(@Req() req: Request, @Res() res: Response) {
+  async proxy(@Req() req: Request, @Res() res: FastifyReply) {
     const result = await this.steamProxy.proxy(req.originalUrl);
     if (result?.error) {
       res
         .status(result.error === 'rate_limited' ? 429 : 500)
-        .set('X-RateLimit-Status', 'limited')
+        .header('X-RateLimit-Status', 'limited')
         .send(result.error);
     } else {
       res.status(200).send(result);

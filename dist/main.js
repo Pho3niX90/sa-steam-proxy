@@ -23,7 +23,7 @@ exports.AppModule = void 0;
 const common_1 = __webpack_require__(3);
 const app_controller_1 = __webpack_require__(4);
 const schedule_1 = __webpack_require__(5);
-const steam_proxy_service_1 = __webpack_require__(7);
+const steam_proxy_service_1 = __webpack_require__(8);
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -65,7 +65,8 @@ exports.AppController = void 0;
 const common_1 = __webpack_require__(3);
 const schedule_1 = __webpack_require__(5);
 const express_1 = __webpack_require__(6);
-const steam_proxy_service_1 = __webpack_require__(7);
+const fastify_1 = __webpack_require__(7);
+const steam_proxy_service_1 = __webpack_require__(8);
 let AppController = class AppController {
     constructor(steamProxy) {
         this.steamProxy = steamProxy;
@@ -74,7 +75,7 @@ let AppController = class AppController {
         const health = this.steamProxy.healthStatus;
         res
             .status(health.rateLimited ? 429 : 200)
-            .set({
+            .headers({
             'X-RateLimit-Status': health.rateLimited ? 'limited' : 'ok',
             'X-Requests-Per-Minute': health.requestsPerMinute.toString(),
             'X-Backoff': health.backoff.toString(),
@@ -90,7 +91,7 @@ let AppController = class AppController {
         if (result?.error) {
             res
                 .status(result.error === 'rate_limited' ? 429 : 500)
-                .set('X-RateLimit-Status', 'limited')
+                .header('X-RateLimit-Status', 'limited')
                 .send(result.error);
         }
         else {
@@ -110,7 +111,7 @@ __decorate([
     (0, common_1.Get)('/healthz'),
     __param(0, (0, common_1.Res)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [typeof (_b = typeof express_1.Response !== "undefined" && express_1.Response) === "function" ? _b : Object]),
+    __metadata("design:paramtypes", [typeof (_b = typeof fastify_1.FastifyReply !== "undefined" && fastify_1.FastifyReply) === "function" ? _b : Object]),
     __metadata("design:returntype", void 0)
 ], AppController.prototype, "getHealth", null);
 __decorate([
@@ -124,7 +125,7 @@ __decorate([
     __param(0, (0, common_1.Req)()),
     __param(1, (0, common_1.Res)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [typeof (_c = typeof express_1.Request !== "undefined" && express_1.Request) === "function" ? _c : Object, typeof (_d = typeof express_1.Response !== "undefined" && express_1.Response) === "function" ? _d : Object]),
+    __metadata("design:paramtypes", [typeof (_c = typeof express_1.Request !== "undefined" && express_1.Request) === "function" ? _c : Object, typeof (_d = typeof fastify_1.FastifyReply !== "undefined" && fastify_1.FastifyReply) === "function" ? _d : Object]),
     __metadata("design:returntype", Promise)
 ], AppController.prototype, "proxy", null);
 __decorate([
@@ -159,6 +160,12 @@ module.exports = require("express");
 
 /***/ }),
 /* 7 */
+/***/ ((module) => {
+
+module.exports = require("fastify");
+
+/***/ }),
+/* 8 */
 /***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
 
@@ -175,8 +182,8 @@ var SteamProxyService_1;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SteamProxyService = void 0;
 const common_1 = __webpack_require__(3);
-const undici_1 = __webpack_require__(8);
-const append_query_1 = __webpack_require__(9);
+const undici_1 = __webpack_require__(9);
+const append_query_1 = __webpack_require__(10);
 const STEAM_API_HOST = 'http://api.steampowered.com';
 const SAFE_PROBE_PATH = '/ISteamWebAPIUtil/GetServerInfo/v0001/';
 const CACHE_TTL_MS = 10_000;
@@ -332,19 +339,19 @@ exports.SteamProxyService = SteamProxyService = SteamProxyService_1 = __decorate
 
 
 /***/ }),
-/* 8 */
+/* 9 */
 /***/ ((module) => {
 
 module.exports = require("undici");
 
 /***/ }),
-/* 9 */
+/* 10 */
 /***/ ((module) => {
 
 module.exports = require("append-query");
 
 /***/ }),
-/* 10 */
+/* 11 */
 /***/ ((module) => {
 
 module.exports = require("@nestjs/platform-fastify");
@@ -385,7 +392,7 @@ var exports = __webpack_exports__;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core_1 = __webpack_require__(1);
 const app_module_1 = __webpack_require__(2);
-const platform_fastify_1 = __webpack_require__(10);
+const platform_fastify_1 = __webpack_require__(11);
 async function bootstrap() {
     const app = await core_1.NestFactory.create(app_module_1.AppModule, new platform_fastify_1.FastifyAdapter());
     await app.listen(8080, '0.0.0.0');
