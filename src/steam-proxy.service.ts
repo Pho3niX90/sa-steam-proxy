@@ -7,7 +7,7 @@ import { Buffer } from 'buffer';
 const appendQuery = require('append-query');
 const STEAM_API_HOST = 'http://api.steampowered.com';
 const SAFE_PROBE_PATH = '/ISteamWebAPIUtil/GetServerInfo/v0001/';
-const CACHE_TTL_MS = 10_000;
+const CACHE_TTL_MS = 60_000;
 const ONE_MINUTE = 60_000;
 
 interface CacheEntry {

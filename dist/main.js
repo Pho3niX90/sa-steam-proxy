@@ -188,7 +188,7 @@ const buffer_1 = __webpack_require__(11);
 const appendQuery = __webpack_require__(12);
 const STEAM_API_HOST = 'http://api.steampowered.com';
 const SAFE_PROBE_PATH = '/ISteamWebAPIUtil/GetServerInfo/v0001/';
-const CACHE_TTL_MS = 10_000;
+const CACHE_TTL_MS = 60_000;
 const ONE_MINUTE = 60_000;
 let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
     constructor() {
