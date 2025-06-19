@@ -70,7 +70,7 @@ export class SteamProxyService {
     const now = Date.now();
 
     const cached = this.cache.get(cacheKey);
-    if (cached && cached.expires > now && !this.isRateLimited) {
+    if (cached && cached.expires > now) {
       this.logger.debug(`Cache HIT: ${originalPath}`);
       return cached.data;
     }
