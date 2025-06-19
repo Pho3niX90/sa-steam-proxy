@@ -34,6 +34,7 @@ export class AppController {
       res
         .status(result.error === 'rate_limited' ? 429 : 500)
         .header('X-RateLimit-Status', 'limited')
+        .header('X-Status-Message', result.error)
         .send(result.error);
     } else {
       res.status(200).send(result);
