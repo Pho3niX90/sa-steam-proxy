@@ -130,7 +130,7 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], AppController.prototype, "proxy", null);
 __decorate([
-    (0, schedule_1.Cron)(schedule_1.CronExpression.EVERY_5_SECONDS),
+    (0, schedule_1.Cron)(schedule_1.CronExpression.EVERY_5_MINUTES),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", Promise)
