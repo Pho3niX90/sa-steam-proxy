@@ -32,18 +32,18 @@ export class AppController {
     const result = await this.steamProxy.proxy(req.originalUrl);
     if (result?.error) {
       res
-        .status(result.error === 'rate_limited' ? 429 : 500)
-        .header('X-RateLimit-Status', 'limited')
+        .status(result.statusCode || (result.error === 'rate_limited' ? 429 : 500))
+        .header('X-RateLimit-Status', result.error === 'rate_limited' ? 'limited' : 'ok')
         .header('X-Status-Message', result.error)
         .send(result.error);
     } else {
-      res.status(200).send(result);
+      res.status(result.statusCode || 200).send(result.data);
     }
   }
 
   @Cron(CronExpression.EVERY_5_MINUTES)
-  checkRateLimit() {
-    this.steamProxy.checkRateLimiting();
+  async checkRateLimit() {
+    await this.steamProxy.checkRateLimiting();
   }
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)

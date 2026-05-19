@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { Pool } from 'undici';
 import { gunzipSync } from 'zlib';
 import { Buffer } from 'buffer';
@@ -8,11 +8,21 @@ const appendQuery = require('append-query');
 const STEAM_API_HOST = 'http://api.steampowered.com';
 const SAFE_PROBE_PATH = '/ISteamWebAPIUtil/GetServerInfo/v0001/';
 const CACHE_TTL_MS = 60_000;
+const MAX_CACHE_ENTRIES = 5_000;
 const ONE_MINUTE = 60_000;
+const MIN_RETRY_BACKOFF_SECONDS = 5;
+const MAX_RETRY_BACKOFF_SECONDS = 300;
 
 interface CacheEntry {
   data: any;
+  statusCode: number;
   expires: number;
+}
+
+interface ProxyResult {
+  data?: any;
+  statusCode: number;
+  error?: 'rate_limited' | 'upstream_error' | 'nok' | 'decompression_failed';
 }
 
 @Injectable()
@@ -24,9 +34,9 @@ export class SteamProxyService {
   private requestTimestamps: number[] = [];
   private isRateLimited = false;
   private lastFailurePath = '';
-  private retryCounter = 0;
-  private retryBackoff = 5;
+  private retryBackoff = MIN_RETRY_BACKOFF_SECONDS;
   private rateLimitStart?: number;
+  private nextProbeAt = 0;
 
   private metrics = {
     total: 0,
@@ -52,7 +62,7 @@ export class SteamProxyService {
       rateLimited: this.isRateLimited,
       requestsPerMinute: this.requestTimestamps.length,
       backoff: this.retryBackoff,
-      retryIn: this.retryBackoff - this.retryCounter,
+      retryIn: Math.max(Math.ceil((this.nextProbeAt - Date.now()) / 1000), 0),
     };
   }
 
@@ -60,7 +70,7 @@ export class SteamProxyService {
     return { ...this.metrics };
   }
 
-  async proxy(originalPath: string): Promise<any> {
+  async proxy(originalPath: string): Promise<ProxyResult> {
     this.cleanupOldRequests();
     this.requestTimestamps.push(Date.now());
     this.metrics.total++;
@@ -72,12 +82,12 @@ export class SteamProxyService {
     const cached = this.cache.get(cacheKey);
     if (cached && cached.expires > now) {
       this.logger.debug(`Cache HIT: ${originalPath}`);
-      return cached.data;
+      return { data: cached.data, statusCode: cached.statusCode };
     }
 
     if (this.isRateLimited) {
       this.logger.warn(`Blocked by rate limit: ${originalPath}`);
-      return { error: 'rate_limited' };
+      return { error: 'rate_limited', statusCode: 429 };
     }
 
     const start = Date.now();
@@ -109,7 +119,7 @@ export class SteamProxyService {
             raw = gunzipSync(raw);
           } catch (decompErr) {
             this.logger.error(`Decompression failed: ${decompErr.message}`);
-            return { error: 'decompression_failed' };
+            return { error: 'decompression_failed', statusCode: 502 };
           }
         }
 
@@ -131,35 +141,31 @@ export class SteamProxyService {
       }
 
       if (statusCode === 429) {
-        this.handleRateLimit(originalPath);
-        return { error: 'rate_limited' };
+        this.handleRateLimit(originalPath, headers['retry-after']);
+        return { error: 'rate_limited', statusCode };
       }
 
       if (statusCode >= 400) {
         this.metrics.failure++;
         this.logger.warn(`Steam returned ${statusCode} on ${originalPath}`);
-        return { error: 'nok' };
+        return { error: 'upstream_error', statusCode };
       }
 
       this.metrics.success++;
-      this.cache.set(cacheKey, { data, expires: now + CACHE_TTL_MS });
+      this.setCache(cacheKey, { data, statusCode, expires: now + CACHE_TTL_MS });
 
-      return data;
+      return { data, statusCode };
     } catch (err) {
       this.metrics.failure++;
       this.metrics.lastDurationMs = Date.now() - start;
       this.logger.error(`Steam fetch error: ${err.message}`);
-      return { error: 'nok' };
+      return { error: 'nok', statusCode: 502 };
     }
   }
 
   async checkRateLimiting() {
     if (!this.isRateLimited) return;
-
-    this.retryCounter++;
-    if (this.retryCounter < this.retryBackoff) return;
-
-    this.retryCounter = 0;
+    if (Date.now() < this.nextProbeAt) return;
 
     try {
       const res = await this.pool.request({
@@ -172,18 +178,14 @@ export class SteamProxyService {
 
       const retryAfter = res.headers['retry-after'];
       if (retryAfter) {
-        const secs = parseInt(retryAfter as string, 10);
-        if (!isNaN(secs)) {
-          this.retryBackoff = Math.max(secs, 5);
-          this.logger.warn(`Retry-After header: ${secs}s`);
-        }
+        this.applyRetryAfter(retryAfter);
       }
 
       if (res.statusCode < 400) {
         this.isRateLimited = false;
         this.lastFailurePath = '';
-        this.retryBackoff = 5;
-        this.retryCounter = 0;
+        this.retryBackoff = MIN_RETRY_BACKOFF_SECONDS;
+        this.nextProbeAt = 0;
 
         if (this.rateLimitStart) {
           const duration = ((Date.now() - this.rateLimitStart) / 1000).toFixed(1);
@@ -191,12 +193,17 @@ export class SteamProxyService {
           this.rateLimitStart = undefined;
         }
       } else if (res.statusCode === 429) {
-        this.retryBackoff *= 2;
+        if (!retryAfter) {
+          this.retryBackoff = Math.min(this.retryBackoff * 2, MAX_RETRY_BACKOFF_SECONDS);
+        }
+        this.scheduleNextProbe();
         this.logger.warn(`Still rate-limited. Increasing backoff to ${this.retryBackoff}s.`);
       } else {
+        this.scheduleNextProbe();
         this.logger.warn(`Unexpected probe status: ${res.statusCode}`);
       }
     } catch (err) {
+      this.scheduleNextProbe();
       this.logger.error(`Rate-limit probe error: ${err.message}`);
     }
   }
@@ -206,12 +213,58 @@ export class SteamProxyService {
     this.requestTimestamps = this.requestTimestamps.filter(t => t > cutoff);
   }
 
-  private handleRateLimit(path: string) {
+  private setCache(key: string, value: CacheEntry) {
+    this.evictExpiredCacheEntries();
+    if (this.cache.size >= MAX_CACHE_ENTRIES) {
+      // Drop oldest entry (Map preserves insertion order).
+      const oldestKey = this.cache.keys().next().value as string | undefined;
+      if (oldestKey) {
+        this.cache.delete(oldestKey);
+      }
+    }
+    this.cache.set(key, value);
+  }
+
+  private evictExpiredCacheEntries() {
+    const now = Date.now();
+    for (const [key, entry] of this.cache.entries()) {
+      if (entry.expires <= now) {
+        this.cache.delete(key);
+      }
+    }
+  }
+
+  private handleRateLimit(path: string, retryAfterHeader?: string | string[]) {
     this.metrics.failure++;
     this.lastFailurePath = path;
     if (!this.isRateLimited) {
       this.isRateLimited = true;
       this.rateLimitStart = Date.now();
     }
+    if (retryAfterHeader) {
+      this.applyRetryAfter(retryAfterHeader);
+    }
+    this.scheduleNextProbe();
+  }
+
+  private applyRetryAfter(retryAfter: string | string[]) {
+    const headerValue = Array.isArray(retryAfter) ? retryAfter[0] : retryAfter;
+    const secs = parseInt(headerValue, 10);
+    if (isNaN(secs)) {
+      return;
+    }
+    this.retryBackoff = Math.min(
+      Math.max(secs, MIN_RETRY_BACKOFF_SECONDS),
+      MAX_RETRY_BACKOFF_SECONDS,
+    );
+    this.logger.warn(`Retry-After header: ${secs}s`);
+  }
+
+  private scheduleNextProbe() {
+    this.nextProbeAt = Date.now() + (this.retryBackoff * 1000);
+  }
+
+  async onModuleDestroy() {
+    await this.pool.close();
   }
 }
