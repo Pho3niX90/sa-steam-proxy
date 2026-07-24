@@ -67,6 +67,9 @@ export class SteamProxyService {
     lastDurationMs: 0,
   };
 
+  /** Keep the RPM window sliding even when the pod receives no traffic. */
+  private readonly rpmCleanupTimer: ReturnType<typeof setInterval>;
+
   constructor() {
     const sourceIp = (process.env.SOURCE_IP || '').trim();
     this.pool = new Pool(STEAM_API_HOST, {
@@ -81,6 +84,9 @@ export class SteamProxyService {
           }
         : {}),
     });
+
+    this.rpmCleanupTimer = setInterval(() => this.cleanupOldRequests(), 10_000);
+    this.rpmCleanupTimer.unref?.();
 
     this.logger.log(
       sourceIp
@@ -377,6 +383,7 @@ export class SteamProxyService {
   }
 
   async onModuleDestroy() {
+    clearInterval(this.rpmCleanupTimer);
     await this.pool.close();
   }
 }
