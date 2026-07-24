@@ -23,7 +23,7 @@ exports.AppModule = void 0;
 const common_1 = __webpack_require__(3);
 const app_controller_1 = __webpack_require__(4);
 const schedule_1 = __webpack_require__(5);
-const steam_proxy_service_1 = __webpack_require__(8);
+const steam_proxy_service_1 = __webpack_require__(7);
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -59,45 +59,85 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
-var _a, _b, _c, _d;
+var _a, _b, _c, _d, _e, _f;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.AppController = void 0;
 const common_1 = __webpack_require__(3);
 const schedule_1 = __webpack_require__(5);
-const express_1 = __webpack_require__(6);
-const fastify_1 = __webpack_require__(7);
-const steam_proxy_service_1 = __webpack_require__(8);
+const fastify_1 = __webpack_require__(6);
+const steam_proxy_service_1 = __webpack_require__(7);
+const RESERVED_PATHS = new Set(['/healthz', '/ready', '/metrics']);
 let AppController = class AppController {
     constructor(steamProxy) {
         this.steamProxy = steamProxy;
     }
-    getHealth(res) {
-        const health = this.steamProxy.healthStatus;
-        res
-            .status(health.rateLimited ? 429 : 200)
-            .headers({
-            'X-RateLimit-Status': health.rateLimited ? 'limited' : 'ok',
-            'X-Requests-Per-Minute': health.requestsPerMinute.toString(),
-            'X-Backoff': health.backoff.toString(),
-            'X-Retry-In': health.retryIn.toString(),
-        })
-            .send(health.rateLimited ? 'limit' : 'ok');
+    getLiveness(res) {
+        this.sendLiveness(res);
     }
-    getMetrics() {
-        return this.steamProxy.getMetrics();
+    getReady(res) {
+        this.sendReady(res);
+    }
+    getMetrics(res) {
+        res.status(200).send(this.steamProxy.getMetrics());
     }
     async proxy(req, res) {
-        const result = await this.steamProxy.proxy(req.originalUrl);
+        const path = pathnameOf(req);
+        if (path === '/healthz') {
+            this.sendLiveness(res);
+            return;
+        }
+        if (path === '/ready') {
+            this.sendReady(res);
+            return;
+        }
+        if (path === '/metrics') {
+            res.status(200).send(this.steamProxy.getMetrics());
+            return;
+        }
+        if (RESERVED_PATHS.has(path)) {
+            res.status(404).send('not_found');
+            return;
+        }
+        const result = await this.steamProxy.proxy(req.url);
         if (result?.error) {
             res
-                .status(result.statusCode || (result.error === 'rate_limited' ? 429 : 500))
+                .status(result.statusCode ||
+                (result.error === 'rate_limited' ? 429 : result.error === 'bad_key' ? 403 : 500))
                 .header('X-RateLimit-Status', result.error === 'rate_limited' ? 'limited' : 'ok')
+                .header('X-Bad-Key', result.error === 'bad_key' ? 'true' : 'false')
                 .header('X-Status-Message', result.error)
                 .send(result.error);
         }
         else {
             res.status(result.statusCode || 200).send(result.data);
         }
+    }
+    sendLiveness(res) {
+        const live = this.steamProxy.livenessStatus;
+        res
+            .status(200)
+            .headers({
+            'X-Alive': 'true',
+            'X-Requests-Per-Minute': live.requestsPerMinute.toString(),
+        })
+            .send('ok');
+    }
+    sendReady(res) {
+        const ready = this.steamProxy.readyStatus;
+        const body = ready.ready ? 'ok' : ready.status;
+        res
+            .status(ready.ready ? 200 : 503)
+            .headers({
+            'X-Ready': ready.ready ? 'true' : 'false',
+            'X-Ready-Status': ready.status,
+            'X-RateLimit-Status': ready.rateLimited ? 'limited' : 'ok',
+            'X-Bad-Key': ready.badKey ? 'true' : 'false',
+            'X-Requests-Per-Minute': ready.requestsPerMinute.toString(),
+            'X-Backoff': ready.backoff.toString(),
+            'X-Retry-In': ready.retryIn.toString(),
+            'X-Auth-Failures': ready.authFailures.toString(),
+        })
+            .send(body);
     }
     async checkRateLimit() {
         await this.steamProxy.checkRateLimiting();
@@ -114,11 +154,19 @@ __decorate([
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [typeof (_b = typeof fastify_1.FastifyReply !== "undefined" && fastify_1.FastifyReply) === "function" ? _b : Object]),
     __metadata("design:returntype", void 0)
-], AppController.prototype, "getHealth", null);
+], AppController.prototype, "getLiveness", null);
+__decorate([
+    (0, common_1.Get)('/ready'),
+    __param(0, (0, common_1.Res)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [typeof (_c = typeof fastify_1.FastifyReply !== "undefined" && fastify_1.FastifyReply) === "function" ? _c : Object]),
+    __metadata("design:returntype", void 0)
+], AppController.prototype, "getReady", null);
 __decorate([
     (0, common_1.Get)('/metrics'),
+    __param(0, (0, common_1.Res)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", []),
+    __metadata("design:paramtypes", [typeof (_d = typeof fastify_1.FastifyReply !== "undefined" && fastify_1.FastifyReply) === "function" ? _d : Object]),
     __metadata("design:returntype", void 0)
 ], AppController.prototype, "getMetrics", null);
 __decorate([
@@ -126,7 +174,7 @@ __decorate([
     __param(0, (0, common_1.Req)()),
     __param(1, (0, common_1.Res)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [typeof (_c = typeof express_1.Request !== "undefined" && express_1.Request) === "function" ? _c : Object, typeof (_d = typeof fastify_1.FastifyReply !== "undefined" && fastify_1.FastifyReply) === "function" ? _d : Object]),
+    __metadata("design:paramtypes", [typeof (_e = typeof fastify_1.FastifyRequest !== "undefined" && fastify_1.FastifyRequest) === "function" ? _e : Object, typeof (_f = typeof fastify_1.FastifyReply !== "undefined" && fastify_1.FastifyReply) === "function" ? _f : Object]),
     __metadata("design:returntype", Promise)
 ], AppController.prototype, "proxy", null);
 __decorate([
@@ -145,6 +193,11 @@ exports.AppController = AppController = __decorate([
     (0, common_1.Controller)(),
     __metadata("design:paramtypes", [typeof (_a = typeof steam_proxy_service_1.SteamProxyService !== "undefined" && steam_proxy_service_1.SteamProxyService) === "function" ? _a : Object])
 ], AppController);
+function pathnameOf(req) {
+    const raw = req.url || '/';
+    const q = raw.indexOf('?');
+    return q === -1 ? raw : raw.slice(0, q);
+}
 
 
 /***/ }),
@@ -157,16 +210,10 @@ module.exports = require("@nestjs/schedule");
 /* 6 */
 /***/ ((module) => {
 
-module.exports = require("express");
-
-/***/ }),
-/* 7 */
-/***/ ((module) => {
-
 module.exports = require("fastify");
 
 /***/ }),
-/* 8 */
+/* 7 */
 /***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
 
@@ -183,10 +230,10 @@ var SteamProxyService_1;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SteamProxyService = void 0;
 const common_1 = __webpack_require__(3);
-const undici_1 = __webpack_require__(9);
-const zlib_1 = __webpack_require__(10);
-const buffer_1 = __webpack_require__(11);
-const appendQuery = __webpack_require__(12);
+const undici_1 = __webpack_require__(8);
+const zlib_1 = __webpack_require__(9);
+const buffer_1 = __webpack_require__(10);
+const appendQuery = __webpack_require__(11);
 const STEAM_API_HOST = 'http://api.steampowered.com';
 const SAFE_PROBE_PATH = '/ISteamWebAPIUtil/GetServerInfo/v0001/';
 const CACHE_TTL_MS = 60_000;
@@ -194,12 +241,15 @@ const MAX_CACHE_ENTRIES = 5_000;
 const ONE_MINUTE = 60_000;
 const MIN_RETRY_BACKOFF_SECONDS = 5;
 const MAX_RETRY_BACKOFF_SECONDS = 300;
+const BAD_KEY_FAILURE_THRESHOLD = 3;
 let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
     constructor() {
         this.logger = new common_1.Logger(SteamProxyService_1.name);
         this.cache = new Map();
         this.requestTimestamps = [];
         this.isRateLimited = false;
+        this.isBadKey = false;
+        this.consecutiveAuthFailures = 0;
         this.lastFailurePath = '';
         this.retryBackoff = MIN_RETRY_BACKOFF_SECONDS;
         this.nextProbeAt = 0;
@@ -209,27 +259,70 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
             failure: 0,
             lastDurationMs: 0,
         };
+        const sourceIp = (process.env.SOURCE_IP || '').trim();
         this.pool = new undici_1.Pool(STEAM_API_HOST, {
             connections: 100,
             pipelining: 1,
             keepAliveTimeout: 60_000,
+            ...(sourceIp
+                ? {
+                    connect: {
+                        localAddress: sourceIp,
+                    },
+                }
+                : {}),
         });
-        this.logger.log('SteamProxyService initialized using undici.Pool');
+        this.logger.log(sourceIp
+            ? `SteamProxyService initialized using undici.Pool (SOURCE_IP=${sourceIp})`
+            : 'SteamProxyService initialized using undici.Pool');
     }
-    get healthStatus() {
+    get livenessStatus() {
         this.cleanupOldRequests();
         return {
-            healthy: !this.isRateLimited,
+            alive: true,
+            requestsPerMinute: this.requestTimestamps.length,
+        };
+    }
+    get readyStatus() {
+        this.cleanupOldRequests();
+        const reasons = [];
+        if (this.isRateLimited)
+            reasons.push('rate_limited');
+        if (this.isBadKey)
+            reasons.push('bad_key');
+        const ready = reasons.length === 0;
+        return {
+            alive: true,
+            ready,
+            status: ready ? 'ok' : reasons[0],
+            reasons,
             rateLimited: this.isRateLimited,
+            badKey: this.isBadKey,
             requestsPerMinute: this.requestTimestamps.length,
             backoff: this.retryBackoff,
             retryIn: Math.max(Math.ceil((this.nextProbeAt - Date.now()) / 1000), 0),
+            authFailures: this.consecutiveAuthFailures,
+        };
+    }
+    get healthStatus() {
+        const ready = this.readyStatus;
+        return {
+            healthy: ready.ready,
+            rateLimited: ready.rateLimited,
+            requestsPerMinute: ready.requestsPerMinute,
+            backoff: ready.backoff,
+            retryIn: ready.retryIn,
         };
     }
     getMetrics() {
         return { ...this.metrics };
     }
     async proxy(originalPath) {
+        const pathOnly = originalPath.split('?')[0] || '/';
+        if (pathOnly === '/healthz' || pathOnly === '/ready' || pathOnly === '/metrics') {
+            this.logger.warn(`Refusing to proxy reserved path to Steam: ${pathOnly}`);
+            return { error: 'nok', statusCode: 404 };
+        }
         this.cleanupOldRequests();
         this.requestTimestamps.push(Date.now());
         this.metrics.total++;
@@ -258,6 +351,7 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
             this.metrics.lastDurationMs = duration;
             const { statusCode, headers, body } = result;
             let data;
+            let rawText = '';
             try {
                 const contentEncoding = headers['content-encoding'] || '';
                 const contentType = headers['content-type'] || '';
@@ -272,7 +366,7 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
                         return { error: 'decompression_failed', statusCode: 502 };
                     }
                 }
-                const rawText = raw.toString('utf-8');
+                rawText = raw.toString('utf-8');
                 if (contentType.includes('application/json') && rawText.trim() !== '') {
                     try {
                         data = JSON.parse(rawText);
@@ -290,15 +384,21 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
                 this.logger.error(`Steam body read error: ${err.message}`);
                 data = null;
             }
-            if (statusCode === 429) {
+            const classified = this.classifySteamFailure(statusCode, headers, rawText);
+            if (classified === 'rate_limited') {
                 this.handleRateLimit(originalPath, headers['retry-after']);
-                return { error: 'rate_limited', statusCode };
+                return { error: 'rate_limited', statusCode: 429 };
+            }
+            if (classified === 'bad_key') {
+                this.handleAuthFailure(originalPath, statusCode);
+                return { error: 'bad_key', statusCode };
             }
             if (statusCode >= 400) {
                 this.metrics.failure++;
                 this.logger.warn(`Steam returned ${statusCode} on ${originalPath}`);
                 return { error: 'upstream_error', statusCode };
             }
+            this.clearFailureState();
             this.metrics.success++;
             this.setCache(cacheKey, { data, statusCode, expires: now + CACHE_TTL_MS });
             return { data, statusCode };
@@ -311,7 +411,7 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
         }
     }
     async checkRateLimiting() {
-        if (!this.isRateLimited)
+        if (!this.isRateLimited && !this.isBadKey)
             return;
         if (Date.now() < this.nextProbeAt)
             return;
@@ -328,17 +428,19 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
                 this.applyRetryAfter(retryAfter);
             }
             if (res.statusCode < 400) {
-                this.isRateLimited = false;
-                this.lastFailurePath = '';
-                this.retryBackoff = MIN_RETRY_BACKOFF_SECONDS;
-                this.nextProbeAt = 0;
-                if (this.rateLimitStart) {
-                    const duration = ((Date.now() - this.rateLimitStart) / 1000).toFixed(1);
-                    this.logger.log(`Rate limit lifted after ${duration}s`);
-                    this.rateLimitStart = undefined;
+                if (this.isRateLimited) {
+                    this.isRateLimited = false;
+                    this.lastFailurePath = '';
+                    this.retryBackoff = MIN_RETRY_BACKOFF_SECONDS;
+                    this.nextProbeAt = 0;
+                    if (this.rateLimitStart) {
+                        const duration = ((Date.now() - this.rateLimitStart) / 1000).toFixed(1);
+                        this.logger.log(`Rate limit lifted after ${duration}s`);
+                        this.rateLimitStart = undefined;
+                    }
                 }
             }
-            else if (res.statusCode === 429) {
+            else if (this.classifySteamFailure(res.statusCode, res.headers, '') === 'rate_limited') {
                 if (!retryAfter) {
                     this.retryBackoff = Math.min(this.retryBackoff * 2, MAX_RETRY_BACKOFF_SECONDS);
                 }
@@ -355,9 +457,46 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
             this.logger.error(`Rate-limit probe error: ${err.message}`);
         }
     }
+    classifySteamFailure(statusCode, headers, bodyText) {
+        const retryAfter = headers['retry-after'];
+        const body = (bodyText || '').toLowerCase();
+        if (statusCode === 429 || retryAfter) {
+            return 'rate_limited';
+        }
+        if (/too many requests|rate.?limit|request limit|try again later/.test(body)) {
+            return 'rate_limited';
+        }
+        if (statusCode === 401) {
+            return 'bad_key';
+        }
+        if (statusCode === 403) {
+            if (/access is denied|invalid.*key|forbidden|unauthorized|api key/.test(body)) {
+                return 'bad_key';
+            }
+            return 'bad_key';
+        }
+        return null;
+    }
+    handleAuthFailure(path, statusCode) {
+        this.metrics.failure++;
+        this.consecutiveAuthFailures++;
+        this.lastFailurePath = path;
+        if (this.consecutiveAuthFailures >= BAD_KEY_FAILURE_THRESHOLD && !this.isBadKey) {
+            this.isBadKey = true;
+            this.logger.error(`Marked bad_key after ${this.consecutiveAuthFailures} auth failures ` +
+                `(last HTTP ${statusCode} on ${path})`);
+        }
+    }
+    clearFailureState() {
+        this.consecutiveAuthFailures = 0;
+        if (this.isBadKey) {
+            this.logger.log('Cleared bad_key after successful Steam response');
+        }
+        this.isBadKey = false;
+    }
     cleanupOldRequests() {
         const cutoff = Date.now() - ONE_MINUTE;
-        this.requestTimestamps = this.requestTimestamps.filter(t => t > cutoff);
+        this.requestTimestamps = this.requestTimestamps.filter((t) => t > cutoff);
     }
     setCache(key, value) {
         this.evictExpiredCacheEntries();
@@ -383,6 +522,7 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
         if (!this.isRateLimited) {
             this.isRateLimited = true;
             this.rateLimitStart = Date.now();
+            this.logger.warn(`Entered rate_limited state on ${path}`);
         }
         if (retryAfterHeader) {
             this.applyRetryAfter(retryAfterHeader);
@@ -399,7 +539,7 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
         this.logger.warn(`Retry-After header: ${secs}s`);
     }
     scheduleNextProbe() {
-        this.nextProbeAt = Date.now() + (this.retryBackoff * 1000);
+        this.nextProbeAt = Date.now() + this.retryBackoff * 1000;
     }
     async onModuleDestroy() {
         await this.pool.close();
@@ -413,31 +553,31 @@ exports.SteamProxyService = SteamProxyService = SteamProxyService_1 = __decorate
 
 
 /***/ }),
-/* 9 */
+/* 8 */
 /***/ ((module) => {
 
 module.exports = require("undici");
 
 /***/ }),
-/* 10 */
+/* 9 */
 /***/ ((module) => {
 
 module.exports = require("zlib");
 
 /***/ }),
-/* 11 */
+/* 10 */
 /***/ ((module) => {
 
 module.exports = require("buffer");
 
 /***/ }),
-/* 12 */
+/* 11 */
 /***/ ((module) => {
 
 module.exports = require("append-query");
 
 /***/ }),
-/* 13 */
+/* 12 */
 /***/ ((module) => {
 
 module.exports = require("@nestjs/platform-fastify");
@@ -478,10 +618,12 @@ var exports = __webpack_exports__;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core_1 = __webpack_require__(1);
 const app_module_1 = __webpack_require__(2);
-const platform_fastify_1 = __webpack_require__(13);
+const platform_fastify_1 = __webpack_require__(12);
 async function bootstrap() {
     const app = await core_1.NestFactory.create(app_module_1.AppModule, new platform_fastify_1.FastifyAdapter());
-    await app.listen(8080, '0.0.0.0');
+    const listenHost = process.env.LISTEN_HOST || '0.0.0.0';
+    const listenPort = Number.parseInt(process.env.LISTEN_PORT || '8080', 10) || 8080;
+    await app.listen(listenPort, listenHost);
 }
 bootstrap();
 

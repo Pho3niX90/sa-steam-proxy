@@ -8,7 +8,9 @@ async function bootstrap() {
     AppModule,
     new FastifyAdapter(),
   );
-  await app.listen(8080, '0.0.0.0');
+  const listenHost = process.env.LISTEN_HOST || '0.0.0.0';
+  const listenPort = Number.parseInt(process.env.LISTEN_PORT || '8080', 10) || 8080;
+  await app.listen(listenPort, listenHost);
 }
 
 bootstrap();

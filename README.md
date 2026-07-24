@@ -8,9 +8,9 @@ A **high-performance**, **rate-limit-aware** proxy service for the [Steam Web AP
 
 - ⚡ **Efficient Proxying** – Forwards requests with minimal overhead
 - 🧠 **Caching** – 10-second in-memory cache to reduce Steam load
-- 🛡️ **Rate Limit Protection** – Detects `429` responses and handles gracefully
+- 🛡️ **Rate Limit Protection** – Detects Steam throttling (Retry-After, rate-limit body text; 429 if present — Steam often does not send 429)
 - 🔁 **Adaptive Backoff** – Exponential delay between retries after rate-limiting
-- ❤️ **Health Monitoring** – `/healthz` and `/metrics` endpoints for liveness and diagnostics
+- ❤️ **Health Monitoring** – `/healthz` (liveness), `/ready` (rate limit / bad key), `/metrics`
 - 🧵 **High Performance** – Uses Fastify and `undici.Pool` for ultra-low latency
 - ♻️ **Automatic Recovery** – Periodically probes Steam to detect rate-limit lift
 - 🕛 **Scheduled Restart** – Optional daily restart at midnight to ensure stability
@@ -59,23 +59,25 @@ GET /ISteamUser/GetPlayerSummaries/v0002/?key=YOURKEY&steamids=76561197960435530
 
 ---
 
-### ❤️ Health Check
+### Liveness — `/healthz`
 
-```
-GET /healthz
-```
+Process is up. Always `200` + `ok` when the HTTP server answers.
 
-Returns:
-- `200 OK` – Healthy
-- `429 Too Many Requests` – Currently rate-limited
+Use for Kubernetes **livenessProbe**.
 
-Headers:
-- `X-RateLimit-Status`: `"ok"` or `"limited"`
-- `X-Requests-Per-Minute`: Recent request volume
-- `X-Backoff`: Current backoff duration in seconds
-- `X-Retry-In`: Time until next rate-limit check
+### Readiness — `/ready`
 
----
+Real ability to serve Steam traffic:
+
+| HTTP | Body | Meaning |
+|------|------|---------|
+| 200 | `ok` | Ready |
+| 503 | `rate_limited` | Throttled / backing off |
+| 503 | `bad_key` | Steam rejecting the key (401/403 auth-style) |
+
+Headers include `X-Ready`, `X-Ready-Status`, `X-RateLimit-Status`, `X-Bad-Key`, `X-Requests-Per-Minute`, `X-Backoff`, `X-Retry-In`.
+
+Use for Kubernetes **readinessProbe** and health-service checks.
 
 ### 📊 Metrics
 
