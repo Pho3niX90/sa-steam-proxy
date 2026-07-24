@@ -288,6 +288,8 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
                 }
                 : {}),
         });
+        this.rpmCleanupTimer = setInterval(() => this.cleanupOldRequests(), 10_000);
+        this.rpmCleanupTimer.unref?.();
         this.logger.log(sourceIp
             ? `SteamProxyService initialized using undici.Pool (SOURCE_IP=${sourceIp})`
             : 'SteamProxyService initialized using undici.Pool');
@@ -538,6 +540,7 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
         this.nextProbeAt = Date.now() + this.retryBackoff * 1000;
     }
     async onModuleDestroy() {
+        clearInterval(this.rpmCleanupTimer);
         await this.pool.close();
     }
 };
