@@ -1,7 +1,7 @@
 {
   "name": "sa-steam-proxy",
-  "version": "0.0.3",
-  "description": "",
+  "version": "0.0.4",
+  "description": "Steam Web API proxy with rate-limit awareness",
   "author": "",
   "private": true,
   "license": "UNLICENSED",

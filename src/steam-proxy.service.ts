@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { Pool } from 'undici';
 import { gunzipSync } from 'zlib';
 import { Buffer } from 'buffer';
+import { classifySteamFailure } from './steam-failure';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const appendQuery = require('append-query');
@@ -99,8 +100,9 @@ export class SteamProxyService {
 
   /**
    * Readiness: not rate-limited and not stuck on a bad/rejected Steam key.
-   * Steam rarely returns HTTP 429; we also treat Retry-After and rate-limit
-   * wording in bodies as rate-limited, and 401 / auth-style 403 as bad_key.
+   * Steam rarely returns HTTP 429; we also treat Retry-After, rate-limit
+   * wording, and bare 403 as rate-limited. Only 401 / explicit invalid-key
+   * 403 bodies latch bad_key.
    */
   get readyStatus(): ReadyStatus {
     this.cleanupOldRequests();
@@ -218,7 +220,7 @@ export class SteamProxyService {
         data = null;
       }
 
-      const classified = this.classifySteamFailure(statusCode, headers, rawText);
+      const classified = classifySteamFailure(statusCode, headers, rawText);
 
       if (classified === 'rate_limited') {
         this.handleRateLimit(originalPath, headers['retry-after']);
@@ -281,7 +283,7 @@ export class SteamProxyService {
           }
         }
         // bad_key stays until a real keyed request succeeds.
-      } else if (this.classifySteamFailure(res.statusCode, res.headers, '') === 'rate_limited') {
+      } else if (classifySteamFailure(res.statusCode, res.headers, '') === 'rate_limited') {
         if (!retryAfter) {
           this.retryBackoff = Math.min(this.retryBackoff * 2, MAX_RETRY_BACKOFF_SECONDS);
         }
@@ -295,44 +297,6 @@ export class SteamProxyService {
       this.scheduleNextProbe();
       this.logger.error(`Rate-limit probe error: ${err.message}`);
     }
-  }
-
-  /**
-   * Steam historically does not use 429 reliably. Detect:
-   * - 429 or Retry-After → rate limited
-   * - body rate-limit wording → rate limited
-   * - 401 / access-denied style 403 → bad key
-   * - bare 403 (common for invalid publisher keys) → bad key
-   */
-  private classifySteamFailure(
-    statusCode: number,
-    headers: Record<string, string | string[] | undefined>,
-    bodyText: string,
-  ): 'rate_limited' | 'bad_key' | null {
-    const retryAfter = headers['retry-after'];
-    const body = (bodyText || '').toLowerCase();
-
-    if (statusCode === 429 || retryAfter) {
-      return 'rate_limited';
-    }
-    if (
-      /too many requests|rate.?limit|request limit|try again later/.test(body)
-    ) {
-      return 'rate_limited';
-    }
-
-    if (statusCode === 401) {
-      return 'bad_key';
-    }
-    if (statusCode === 403) {
-      if (/access is denied|invalid.*key|forbidden|unauthorized|api key/.test(body)) {
-        return 'bad_key';
-      }
-      // Steam often returns empty-body 403 for rejected keys.
-      return 'bad_key';
-    }
-
-    return null;
   }
 
   private handleAuthFailure(path: string, statusCode: number) {

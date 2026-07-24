@@ -63,6 +63,8 @@ GET /ISteamUser/GetPlayerSummaries/v0002/?key=YOURKEY&steamids=76561197960435530
 
 Process is up. Always `200` + `ok` when the HTTP server answers.
 
+Headers include `X-Proxy-Version` (and optional `X-Git-Sha` / `X-Image-Tag`).
+
 Use for Kubernetes **livenessProbe**.
 
 ### Readiness — `/ready`
@@ -72,10 +74,10 @@ Real ability to serve Steam traffic:
 | HTTP | Body | Meaning |
 |------|------|---------|
 | 200 | `ok` | Ready |
-| 503 | `rate_limited` | Throttled / backing off |
-| 503 | `bad_key` | Steam rejecting the key (401/403 auth-style) |
+| 503 | `rate_limited` | Throttled / backing off (incl. bare Steam 403) |
+| 503 | `bad_key` | Steam rejecting the key (401 / explicit invalid-key 403) |
 
-Headers include `X-Ready`, `X-Ready-Status`, `X-RateLimit-Status`, `X-Bad-Key`, `X-Requests-Per-Minute`, `X-Backoff`, `X-Retry-In`.
+Headers include `X-Ready`, `X-Ready-Status`, `X-RateLimit-Status`, `X-Bad-Key`, `X-Requests-Per-Minute`, `X-Backoff`, `X-Retry-In`, `X-Proxy-Version`, optional `X-Git-Sha` / `X-Image-Tag`.
 
 Use for Kubernetes **readinessProbe** and health-service checks.
 
@@ -92,9 +94,16 @@ Returns JSON with:
   "total": 543,
   "success": 521,
   "failure": 22,
-  "lastDurationMs": 118
+  "lastDurationMs": 118,
+  "build": {
+    "version": "0.0.4",
+    "gitSha": "abc123",
+    "imageTag": "ghcr.io/pho3nix90/sa-steam-proxy:latest"
+  }
 }
 ```
+
+Version also available via `X-Proxy-Version` on `/healthz` and `/ready`.
 
 ---
 
@@ -105,8 +114,16 @@ Constants in `steam-proxy.service.ts`:
 | Name             | Description                           | Default                         |
 |------------------|---------------------------------------|---------------------------------|
 | `STEAM_API_HOST` | Steam API base URL                    | `'http://api.steampowered.com'` |
-| `CACHE_TTL_MS`   | Response cache time-to-live (in ms)   | `10000`                         |
+| `CACHE_TTL_MS`   | Response cache time-to-live (in ms)   | `60000`                         |
 | `ONE_MINUTE`     | Time window for rate tracking (in ms) | `60000`                         |
+
+Env for build identity (set in Docker / k8s):
+
+| Name | Description |
+|------|-------------|
+| `APP_VERSION` | Semver override (defaults to `package.json`) |
+| `GIT_SHA` | Commit hash |
+| `IMAGE_TAG` | Image ref used to launch the pod |
 
 ---
 

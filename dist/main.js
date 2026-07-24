@@ -66,6 +66,7 @@ const common_1 = __webpack_require__(3);
 const schedule_1 = __webpack_require__(5);
 const fastify_1 = __webpack_require__(6);
 const steam_proxy_service_1 = __webpack_require__(7);
+const version_1 = __webpack_require__(13);
 const RESERVED_PATHS = new Set(['/healthz', '/ready', '/metrics']);
 let AppController = class AppController {
     constructor(steamProxy) {
@@ -78,7 +79,13 @@ let AppController = class AppController {
         this.sendReady(res);
     }
     getMetrics(res) {
-        res.status(200).send(this.steamProxy.getMetrics());
+        res
+            .status(200)
+            .headers((0, version_1.proxyVersionHeaders)())
+            .send({
+            ...this.steamProxy.getMetrics(),
+            build: (0, version_1.getProxyBuildInfo)(),
+        });
     }
     async proxy(req, res) {
         const path = pathnameOf(req);
@@ -91,7 +98,13 @@ let AppController = class AppController {
             return;
         }
         if (path === '/metrics') {
-            res.status(200).send(this.steamProxy.getMetrics());
+            res
+                .status(200)
+                .headers((0, version_1.proxyVersionHeaders)())
+                .send({
+                ...this.steamProxy.getMetrics(),
+                build: (0, version_1.getProxyBuildInfo)(),
+            });
             return;
         }
         if (RESERVED_PATHS.has(path)) {
@@ -117,6 +130,7 @@ let AppController = class AppController {
         res
             .status(200)
             .headers({
+            ...(0, version_1.proxyVersionHeaders)(),
             'X-Alive': 'true',
             'X-Requests-Per-Minute': live.requestsPerMinute.toString(),
         })
@@ -128,6 +142,7 @@ let AppController = class AppController {
         res
             .status(ready.ready ? 200 : 503)
             .headers({
+            ...(0, version_1.proxyVersionHeaders)(),
             'X-Ready': ready.ready ? 'true' : 'false',
             'X-Ready-Status': ready.status,
             'X-RateLimit-Status': ready.rateLimited ? 'limited' : 'ok',
@@ -233,7 +248,8 @@ const common_1 = __webpack_require__(3);
 const undici_1 = __webpack_require__(8);
 const zlib_1 = __webpack_require__(9);
 const buffer_1 = __webpack_require__(10);
-const appendQuery = __webpack_require__(11);
+const steam_failure_1 = __webpack_require__(11);
+const appendQuery = __webpack_require__(12);
 const STEAM_API_HOST = 'http://api.steampowered.com';
 const SAFE_PROBE_PATH = '/ISteamWebAPIUtil/GetServerInfo/v0001/';
 const CACHE_TTL_MS = 60_000;
@@ -384,7 +400,7 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
                 this.logger.error(`Steam body read error: ${err.message}`);
                 data = null;
             }
-            const classified = this.classifySteamFailure(statusCode, headers, rawText);
+            const classified = (0, steam_failure_1.classifySteamFailure)(statusCode, headers, rawText);
             if (classified === 'rate_limited') {
                 this.handleRateLimit(originalPath, headers['retry-after']);
                 return { error: 'rate_limited', statusCode: 429 };
@@ -440,7 +456,7 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
                     }
                 }
             }
-            else if (this.classifySteamFailure(res.statusCode, res.headers, '') === 'rate_limited') {
+            else if ((0, steam_failure_1.classifySteamFailure)(res.statusCode, res.headers, '') === 'rate_limited') {
                 if (!retryAfter) {
                     this.retryBackoff = Math.min(this.retryBackoff * 2, MAX_RETRY_BACKOFF_SECONDS);
                 }
@@ -456,26 +472,6 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
             this.scheduleNextProbe();
             this.logger.error(`Rate-limit probe error: ${err.message}`);
         }
-    }
-    classifySteamFailure(statusCode, headers, bodyText) {
-        const retryAfter = headers['retry-after'];
-        const body = (bodyText || '').toLowerCase();
-        if (statusCode === 429 || retryAfter) {
-            return 'rate_limited';
-        }
-        if (/too many requests|rate.?limit|request limit|try again later/.test(body)) {
-            return 'rate_limited';
-        }
-        if (statusCode === 401) {
-            return 'bad_key';
-        }
-        if (statusCode === 403) {
-            if (/access is denied|invalid.*key|forbidden|unauthorized|api key/.test(body)) {
-                return 'bad_key';
-            }
-            return 'bad_key';
-        }
-        return null;
     }
     handleAuthFailure(path, statusCode) {
         this.metrics.failure++;
@@ -572,12 +568,105 @@ module.exports = require("buffer");
 
 /***/ }),
 /* 11 */
+/***/ ((__unused_webpack_module, exports) => {
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.classifySteamFailure = classifySteamFailure;
+function classifySteamFailure(statusCode, headers, bodyText) {
+    const retryAfter = headers['retry-after'];
+    const body = (bodyText || '').toLowerCase();
+    if (statusCode === 429 || retryAfter) {
+        return 'rate_limited';
+    }
+    if (/too many requests|rate.?limit|request limit|try again later/.test(body)) {
+        return 'rate_limited';
+    }
+    if (statusCode === 401) {
+        return 'bad_key';
+    }
+    if (statusCode === 403) {
+        if (/access is denied|invalid.*(?:api.?)?key|(?:api.?)?key.*(?:invalid|denied|revoked|missing)|unauthorized/.test(body)) {
+            return 'bad_key';
+        }
+        return 'rate_limited';
+    }
+    return null;
+}
+
+
+/***/ }),
+/* 12 */
 /***/ ((module) => {
 
 module.exports = require("append-query");
 
 /***/ }),
-/* 12 */
+/* 13 */
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getProxyBuildInfo = getProxyBuildInfo;
+exports.proxyVersionHeaders = proxyVersionHeaders;
+const fs_1 = __webpack_require__(14);
+const path_1 = __webpack_require__(15);
+let cached = null;
+function readPackageVersion() {
+    try {
+        const pkgPath = (0, path_1.join)(process.cwd(), 'package.json');
+        const pkg = JSON.parse((0, fs_1.readFileSync)(pkgPath, 'utf8'));
+        return (pkg.version || '').trim() || 'unknown';
+    }
+    catch {
+        return 'unknown';
+    }
+}
+function optionalEnv(...keys) {
+    for (const key of keys) {
+        const v = (process.env[key] || '').trim();
+        if (v)
+            return v;
+    }
+    return null;
+}
+function getProxyBuildInfo() {
+    if (cached)
+        return cached;
+    cached = {
+        version: optionalEnv('APP_VERSION', 'npm_package_version') || readPackageVersion(),
+        gitSha: optionalEnv('GIT_SHA', 'GITHUB_SHA', 'COMMIT_SHA'),
+        imageTag: optionalEnv('IMAGE_TAG', 'STEAM_PROXY_IMAGE'),
+    };
+    return cached;
+}
+function proxyVersionHeaders() {
+    const info = getProxyBuildInfo();
+    const headers = {
+        'X-Proxy-Version': info.version,
+    };
+    if (info.gitSha)
+        headers['X-Git-Sha'] = info.gitSha;
+    if (info.imageTag)
+        headers['X-Image-Tag'] = info.imageTag;
+    return headers;
+}
+
+
+/***/ }),
+/* 14 */
+/***/ ((module) => {
+
+module.exports = require("fs");
+
+/***/ }),
+/* 15 */
+/***/ ((module) => {
+
+module.exports = require("path");
+
+/***/ }),
+/* 16 */
 /***/ ((module) => {
 
 module.exports = require("@nestjs/platform-fastify");
@@ -618,7 +707,7 @@ var exports = __webpack_exports__;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core_1 = __webpack_require__(1);
 const app_module_1 = __webpack_require__(2);
-const platform_fastify_1 = __webpack_require__(12);
+const platform_fastify_1 = __webpack_require__(16);
 async function bootstrap() {
     const app = await core_1.NestFactory.create(app_module_1.AppModule, new platform_fastify_1.FastifyAdapter());
     const listenHost = process.env.LISTEN_HOST || '0.0.0.0';

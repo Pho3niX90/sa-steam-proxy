@@ -2,6 +2,7 @@ import { Controller, Get, Req, Res } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { FastifyReply, FastifyRequest } from 'fastify';
 import { SteamProxyService } from './steam-proxy.service';
+import { getProxyBuildInfo, proxyVersionHeaders } from './version';
 
 const RESERVED_PATHS = new Set(['/healthz', '/ready', '/metrics']);
 
@@ -21,6 +22,7 @@ export class AppController {
   /**
    * Readiness: able to usefully proxy Steam traffic.
    * 200 + body "ok" when ready; 503 + reason (rate_limited | bad_key) when not.
+   * Always includes X-Proxy-Version (+ optional X-Git-Sha / X-Image-Tag).
    */
   @Get('/ready')
   getReady(@Res() res: FastifyReply) {
@@ -29,7 +31,13 @@ export class AppController {
 
   @Get('/metrics')
   getMetrics(@Res() res: FastifyReply) {
-    res.status(200).send(this.steamProxy.getMetrics());
+    res
+      .status(200)
+      .headers(proxyVersionHeaders())
+      .send({
+        ...this.steamProxy.getMetrics(),
+        build: getProxyBuildInfo(),
+      });
   }
 
   /**
@@ -48,7 +56,13 @@ export class AppController {
       return;
     }
     if (path === '/metrics') {
-      res.status(200).send(this.steamProxy.getMetrics());
+      res
+        .status(200)
+        .headers(proxyVersionHeaders())
+        .send({
+          ...this.steamProxy.getMetrics(),
+          build: getProxyBuildInfo(),
+        });
       return;
     }
     if (RESERVED_PATHS.has(path)) {
@@ -77,6 +91,7 @@ export class AppController {
     res
       .status(200)
       .headers({
+        ...proxyVersionHeaders(),
         'X-Alive': 'true',
         'X-Requests-Per-Minute': live.requestsPerMinute.toString(),
       })
@@ -89,6 +104,7 @@ export class AppController {
     res
       .status(ready.ready ? 200 : 503)
       .headers({
+        ...proxyVersionHeaders(),
         'X-Ready': ready.ready ? 'true' : 'false',
         'X-Ready-Status': ready.status,
         'X-RateLimit-Status': ready.rateLimited ? 'limited' : 'ok',
