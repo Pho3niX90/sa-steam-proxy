@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { Pool } from 'undici';
 import { gunzipSync } from 'zlib';
 import { Buffer } from 'buffer';
-import { classifySteamFailure } from './steam-failure';
+import { classifySteamFailure, redactSteamPathForLog } from './steam-failure';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const appendQuery = require('append-query');
@@ -106,9 +106,9 @@ export class SteamProxyService {
 
   /**
    * Readiness: not rate-limited and not stuck on a bad/rejected Steam key.
-   * Steam rarely returns HTTP 429; we also treat Retry-After, rate-limit
-   * wording, and bare 403 as rate-limited. Only 401 / explicit invalid-key
-   * 403 bodies latch bad_key.
+   * Steam rarely returns HTTP 429; we also treat 420, 503, Retry-After,
+   * rate-limit wording, and bare 403 as rate-limited. Only 401 / explicit
+   * invalid-key 403 bodies latch bad_key (cleared on any keyed success).
    */
   get readyStatus(): ReadyStatus {
     this.cleanupOldRequests();
@@ -163,12 +163,12 @@ export class SteamProxyService {
 
     const cached = this.cache.get(cacheKey);
     if (cached && cached.expires > now) {
-      this.logger.debug(`Cache HIT: ${originalPath}`);
+      this.logger.debug(`Cache HIT: ${redactSteamPathForLog(originalPath)}`);
       return { data: cached.data, statusCode: cached.statusCode };
     }
 
     if (this.isRateLimited) {
-      this.logger.warn(`Blocked by rate limit: ${originalPath}`);
+      this.logger.warn(`Blocked by rate limit: ${redactSteamPathForLog(originalPath)}`);
       return { error: 'rate_limited', statusCode: 429 };
     }
 
@@ -240,7 +240,9 @@ export class SteamProxyService {
 
       if (statusCode >= 400) {
         this.metrics.failure++;
-        this.logger.warn(`Steam returned ${statusCode} on ${originalPath}`);
+        this.logger.warn(
+          `Steam returned ${statusCode} on ${redactSteamPathForLog(originalPath)}`,
+        );
         return { error: 'upstream_error', statusCode };
       }
 
@@ -313,7 +315,7 @@ export class SteamProxyService {
       this.isBadKey = true;
       this.logger.error(
         `Marked bad_key after ${this.consecutiveAuthFailures} auth failures ` +
-          `(last HTTP ${statusCode} on ${path})`,
+          `(last HTTP ${statusCode} on ${redactSteamPathForLog(path)})`,
       );
     }
   }
@@ -357,7 +359,7 @@ export class SteamProxyService {
     if (!this.isRateLimited) {
       this.isRateLimited = true;
       this.rateLimitStart = Date.now();
-      this.logger.warn(`Entered rate_limited state on ${path}`);
+      this.logger.warn(`Entered rate_limited state on ${redactSteamPathForLog(path)}`);
     }
     if (retryAfterHeader) {
       this.applyRetryAfter(retryAfterHeader);

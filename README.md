@@ -8,7 +8,7 @@ A **high-performance**, **rate-limit-aware** proxy service for the [Steam Web AP
 
 - ⚡ **Efficient Proxying** – Forwards requests with minimal overhead
 - 🧠 **Caching** – 10-second in-memory cache to reduce Steam load
-- 🛡️ **Rate Limit Protection** – Detects Steam throttling (Retry-After, rate-limit body text; 429 if present — Steam often does not send 429)
+- 🛡️ **Rate Limit Protection** – Detects Steam throttling (429, unofficial 420, 503, bare 403, Retry-After, rate-limit body text — Steam often skips 429)
 - 🔁 **Adaptive Backoff** – Exponential delay between retries after rate-limiting
 - ❤️ **Health Monitoring** – `/healthz` (liveness), `/ready` (rate limit / bad key), `/metrics`
 - 🧵 **High Performance** – Uses Fastify and `undici.Pool` for ultra-low latency
@@ -74,8 +74,8 @@ Real ability to serve Steam traffic:
 | HTTP | Body | Meaning |
 |------|------|---------|
 | 200 | `ok` | Ready |
-| 503 | `rate_limited` | Throttled / backing off (incl. bare Steam 403) |
-| 503 | `bad_key` | Steam rejecting the key (401 / explicit invalid-key 403) |
+| 503 | `rate_limited` | Throttled / backing off (429, 420, 503, bare 403, Retry-After) |
+| 503 | `bad_key` | Steam rejecting the key (401 / explicit invalid-key 403); clears on keyed success |
 
 Headers include `X-Ready`, `X-Ready-Status`, `X-RateLimit-Status`, `X-Bad-Key`, `X-Requests-Per-Minute`, `X-Backoff`, `X-Retry-In`, `X-Proxy-Version`, optional `X-Git-Sha` / `X-Image-Tag`.
 

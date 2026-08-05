@@ -349,11 +349,11 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
         const now = Date.now();
         const cached = this.cache.get(cacheKey);
         if (cached && cached.expires > now) {
-            this.logger.debug(`Cache HIT: ${originalPath}`);
+            this.logger.debug(`Cache HIT: ${(0, steam_failure_1.redactSteamPathForLog)(originalPath)}`);
             return { data: cached.data, statusCode: cached.statusCode };
         }
         if (this.isRateLimited) {
-            this.logger.warn(`Blocked by rate limit: ${originalPath}`);
+            this.logger.warn(`Blocked by rate limit: ${(0, steam_failure_1.redactSteamPathForLog)(originalPath)}`);
             return { error: 'rate_limited', statusCode: 429 };
         }
         const start = Date.now();
@@ -413,7 +413,7 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
             }
             if (statusCode >= 400) {
                 this.metrics.failure++;
-                this.logger.warn(`Steam returned ${statusCode} on ${originalPath}`);
+                this.logger.warn(`Steam returned ${statusCode} on ${(0, steam_failure_1.redactSteamPathForLog)(originalPath)}`);
                 return { error: 'upstream_error', statusCode };
             }
             this.clearFailureState();
@@ -482,7 +482,7 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
         if (this.consecutiveAuthFailures >= BAD_KEY_FAILURE_THRESHOLD && !this.isBadKey) {
             this.isBadKey = true;
             this.logger.error(`Marked bad_key after ${this.consecutiveAuthFailures} auth failures ` +
-                `(last HTTP ${statusCode} on ${path})`);
+                `(last HTTP ${statusCode} on ${(0, steam_failure_1.redactSteamPathForLog)(path)})`);
         }
     }
     clearFailureState() {
@@ -520,7 +520,7 @@ let SteamProxyService = SteamProxyService_1 = class SteamProxyService {
         if (!this.isRateLimited) {
             this.isRateLimited = true;
             this.rateLimitStart = Date.now();
-            this.logger.warn(`Entered rate_limited state on ${path}`);
+            this.logger.warn(`Entered rate_limited state on ${(0, steam_failure_1.redactSteamPathForLog)(path)}`);
         }
         if (retryAfterHeader) {
             this.applyRetryAfter(retryAfterHeader);
@@ -576,10 +576,11 @@ module.exports = require("buffer");
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.classifySteamFailure = classifySteamFailure;
+exports.redactSteamPathForLog = redactSteamPathForLog;
 function classifySteamFailure(statusCode, headers, bodyText) {
     const retryAfter = headers['retry-after'];
     const body = (bodyText || '').toLowerCase();
-    if (statusCode === 429 || retryAfter) {
+    if (statusCode === 429 || statusCode === 420 || statusCode === 503 || retryAfter) {
         return 'rate_limited';
     }
     if (/too many requests|rate.?limit|request limit|try again later/.test(body)) {
@@ -595,6 +596,9 @@ function classifySteamFailure(statusCode, headers, bodyText) {
         return 'rate_limited';
     }
     return null;
+}
+function redactSteamPathForLog(path) {
+    return path.replace(/([?&]key=)[^&]*/gi, '$1***');
 }
 
 
