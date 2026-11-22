@@ -1,9 +1,7 @@
-node_modules
-dist
-coverage
+target
 .git
+.github
+bench
 *.md
 .env
 .env.*
-test
-**/*.spec.ts

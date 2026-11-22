@@ -1,140 +1,44 @@
-# Steam API Proxy Service
+# sa-steam-proxy (Rust)
 
-A **high-performance**, **rate-limit-aware** proxy service for the [Steam Web API](https://partner.steamgames.com/doc/webapi), built using **NestJS** and **Fastify**, powered by **undici**.
+Rate-limit-aware HTTP proxy for the [Steam Web API](https://partner.steamgames.com/doc/webapi), rewritten from NestJS/Fastify to Rust (`axum` + `reqwest`/`hyper` + `moka`) for minimal memory footprint across the `/28` `hostNetwork` egress fleet.
 
----
+See [`PARITY.md`](./PARITY.md) for the complete NestJS → Rust parity checklist and [`RESULTS.md`](./RESULTS.md) for side-by-side Docker benchmarks.
 
-## 🚀 Features
+## Endpoints
 
-- ⚡ **Efficient Proxying** – Forwards requests with minimal overhead
-- 🧠 **Caching** – 10-second in-memory cache to reduce Steam load
-- 🛡️ **Rate Limit Protection** – Detects Steam throttling (429, unofficial 420, 503, bare 403, Retry-After, rate-limit body text — Steam often skips 429)
-- 🔁 **Adaptive Backoff** – Exponential delay between retries after rate-limiting
-- ❤️ **Health Monitoring** – `/healthz` (liveness), `/ready` (rate limit / bad key), `/metrics`
-- 🧵 **High Performance** – Uses Fastify and `undici.Pool` for ultra-low latency
-- ♻️ **Automatic Recovery** – Periodically probes Steam to detect rate-limit lift
-- 🕛 **Scheduled Restart** – Optional daily restart at midnight to ensure stability
+| Path | Behaviour |
+|---|---|
+| `GET /healthz` | Liveness probe: always `200` + `"ok"` with `X-Proxy-Version` (+ optional `X-Git-Sha`, `X-Image-Tag`), `X-Alive: true`, `X-Requests-Per-Minute`. |
+| `GET /ready` | Readiness probe: `200` + `"ok"` when ready; `503` + `"rate_limited"` or `"bad_key"` when not, with `X-Ready`, `X-Ready-Status`, `X-RateLimit-Status`, `X-Bad-Key`, `X-Requests-Per-Minute`, `X-Backoff`, `X-Retry-In`, `X-Auth-Failures`, and version headers. |
+| `GET /metrics` | JSON metrics: `{ total, success, failure, lastDurationMs, build: { version, gitSha, imageTag } }` + version headers. |
+| `GET /metrics/prometheus` | Prometheus text exposition format (`sa_steam_proxy_*`). |
+| `GET /*` | Proxies path + query verbatim to `STEAM_API_HOST` (default `http://api.steampowered.com`) with 60s / 5,000-entry response cache, gzip decompression, rate-limit detection/backoff, and `bad_key` latching. |
 
----
+## Environment Variables
 
-## 📦 Installation
+| Variable | Default | Description |
+|---|---|---|
+| `LISTEN_HOST` | `0.0.0.0` | HTTP bind address |
+| `LISTEN_PORT` | `8080` | HTTP listen port |
+| `SOURCE_IP` | *(unset)* | Local egress IP bound on outbound HTTP sockets |
+| `STEAM_API_HOST` | `http://api.steampowered.com` | Upstream Steam API base URL |
+| `CACHE_TTL_MS` | `60000` | Response cache TTL in milliseconds |
+| `MAX_CACHE_ENTRIES` | `5000` | Maximum cached responses |
+| `PROBE_INTERVAL_SECS` | `300` | Rate-limit recovery probe interval (`/ISteamWebAPIUtil/GetServerInfo/v0001/`) |
+| `CONNECT_TIMEOUT_MS` | `15000` | Upstream TCP connect timeout |
+| `UPSTREAM_TIMEOUT_MS` | `30000` | Upstream total request timeout |
+| `MIDNIGHT_RESTART` | `false` | Opt-in graceful exit at 00:00 UTC (replaces Nest's midnight `process.exit()`) |
+| `TOKIO_WORKER_THREADS` | `2` | Tokio runtime worker thread count (bounded for low per-pod RSS across 13 hostNetwork pods) |
+| `APP_VERSION` | `Cargo.toml` version | Version reported in `X-Proxy-Version` and `/metrics` |
+| `GIT_SHA` | *(unset)* | Git commit SHA reported in `X-Git-Sha` and `/metrics` |
+| `IMAGE_TAG` | *(unset)* | Image tag reported in `X-Image-Tag` and `/metrics` |
+| `RUST_LOG` | `info` | `tracing` log filter |
+
+## Development
 
 ```bash
-npm install
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+cargo run --release
 ```
-
----
-
-## ▶️ Running the Application
-
-```bash
-# Development mode
-npm run start
-
-# Watch mode (auto-reload on changes)
-npm run start:dev
-
-# Production mode
-npm run start:prod
-```
-
-The service listens on **port 8080** by default.
-
----
-
-## 🌐 API Endpoints
-
-### 🔄 Steam Proxy
-
-All unmatched paths are forwarded directly to the Steam API:
-
-```
-GET /*  →  http://api.steampowered.com/*
-```
-
-#### Example:
-```
-GET /ISteamUser/GetPlayerSummaries/v0002/?key=YOURKEY&steamids=76561197960435530
-```
-
----
-
-### Liveness — `/healthz`
-
-Process is up. Always `200` + `ok` when the HTTP server answers.
-
-Headers include `X-Proxy-Version` (and optional `X-Git-Sha` / `X-Image-Tag`).
-
-Use for Kubernetes **livenessProbe**.
-
-### Readiness — `/ready`
-
-Real ability to serve Steam traffic:
-
-| HTTP | Body | Meaning |
-|------|------|---------|
-| 200 | `ok` | Ready |
-| 503 | `rate_limited` | Throttled / backing off (429, 420, 503, bare 403, Retry-After) |
-| 503 | `bad_key` | Steam rejecting the key (401 / explicit invalid-key 403); clears on keyed success |
-
-Headers include `X-Ready`, `X-Ready-Status`, `X-RateLimit-Status`, `X-Bad-Key`, `X-Requests-Per-Minute`, `X-Backoff`, `X-Retry-In`, `X-Proxy-Version`, optional `X-Git-Sha` / `X-Image-Tag`.
-
-Use for Kubernetes **readinessProbe** and health-service checks.
-
-### 📊 Metrics
-
-```
-GET /metrics
-```
-
-Returns JSON with:
-
-```json
-{
-  "total": 543,
-  "success": 521,
-  "failure": 22,
-  "lastDurationMs": 118,
-  "build": {
-    "version": "0.0.4",
-    "gitSha": "abc123",
-    "imageTag": "ghcr.io/pho3nix90/sa-steam-proxy:latest"
-  }
-}
-```
-
-Version also available via `X-Proxy-Version` on `/healthz` and `/ready`.
-
----
-
-## ⚙️ Configuration
-
-Constants in `steam-proxy.service.ts`:
-
-| Name             | Description                           | Default                         |
-|------------------|---------------------------------------|---------------------------------|
-| `STEAM_API_HOST` | Steam API base URL                    | `'http://api.steampowered.com'` |
-| `CACHE_TTL_MS`   | Response cache time-to-live (in ms)   | `60000`                         |
-| `ONE_MINUTE`     | Time window for rate tracking (in ms) | `60000`                         |
-
-Env for build identity (set in Docker / k8s):
-
-| Name | Description |
-|------|-------------|
-| `APP_VERSION` | Semver override (defaults to `package.json`) |
-| `GIT_SHA` | Commit hash |
-| `IMAGE_TAG` | Image ref used to launch the pod |
-
----
-
-## 📝 License
-
-This project is [MIT licensed](LICENSE).
-
----
-
-## 📌 Tips
-
-- Use a reverse proxy like **Nginx** or **Cloudflare Tunnel** for TLS and access control.
-- Deploy behind a **Kubernetes HPA** or **PM2 cluster mode** if under high traffic.
-- Monitor rate-limiting via `/healthz` or logs tagged with `[RateLimit]`.

@@ -1,21 +1,25 @@
-# Multi-stage build for sa-steam-proxy (hostNetwork /28 egress pods)
-FROM node:22-alpine AS build
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --legacy-peer-deps
-COPY . .
-RUN npm run build && npm prune --omit=dev --legacy-peer-deps
+# syntax=docker/dockerfile:1.7
+# Multi-stage Rust build for sa-steam-proxy (hostNetwork /28 egress pods)
+ARG RUST_IMAGE=rust:1.100-slim-bookworm
 
-FROM node:22-alpine AS runtime
-ARG APP_VERSION=0.0.4
+FROM ${RUST_IMAGE} AS build
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --release --locked --bin sa-steam-proxy \
+ && mkdir -p /out \
+ && cp target/release/sa-steam-proxy /out/sa-steam-proxy
+
+FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+ARG APP_VERSION=0.1.0
 ARG GIT_SHA=unknown
-WORKDIR /app
-ENV NODE_ENV=production \
-    APP_VERSION=${APP_VERSION} \
-    GIT_SHA=${GIT_SHA}
-COPY --from=build /app/package*.json ./
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/dist ./dist
+ENV APP_VERSION=${APP_VERSION} \
+    GIT_SHA=${GIT_SHA} \
+    RUST_LOG=info \
+    MALLOC_ARENA_MAX=2
+COPY --from=build /out/sa-steam-proxy /usr/local/bin/sa-steam-proxy
 EXPOSE 8080
-USER node
-CMD ["node", "dist/main.js"]
+USER nonroot
+ENTRYPOINT ["/usr/local/bin/sa-steam-proxy"]
