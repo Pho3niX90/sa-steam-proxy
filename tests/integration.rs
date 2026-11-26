@@ -9,7 +9,7 @@ use flate2::Compression;
 use http::header::HeaderValue;
 use sa_steam_proxy::config::ProxyConfig;
 use sa_steam_proxy::http::build_router;
-use sa_steam_proxy::proxy::{ProxyErrorKind, ProxyResult, SteamProxyService, SAFE_PROBE_PATH};
+use sa_steam_proxy::proxy::{ProxyErrorKind, ProxyResult, SteamProxyService, KEY_CANARY_PATH_PREFIX, SAFE_PROBE_PATH};
 use sa_steam_proxy::version::ProxyBuildInfo;
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -490,9 +490,12 @@ async fn bad_key_latching_non_short_circuit_and_recovery() {
         if pq == SAFE_PROBE_PATH {
             MockReply::json(StatusCode::OK, r#"{"servertime":1}"#)
         } else if pq.contains("key=BAD") {
-            MockReply::text(StatusCode::FORBIDDEN, "<html><body>Access is denied</body></html>")
+            MockReply::text(
+                StatusCode::FORBIDDEN,
+                "<html><body>Access is denied. Please verify your <pre>key=</pre> parameter.</body></html>",
+            )
         } else if pq.contains("key=UNAUTH") {
-            MockReply::text(StatusCode::UNAUTHORIZED, "")
+            MockReply::text(StatusCode::UNAUTHORIZED, "Invalid API key")
         } else {
             MockReply::json(StatusCode::OK, r#"{"recovered":true}"#)
         }
@@ -502,7 +505,7 @@ async fn bad_key_latching_non_short_circuit_and_recovery() {
     let svc = make_service(upstream, None, Duration::from_secs(60), 5000, ProxyBuildInfo::default());
     let app = build_router(svc.clone());
 
-    // Failure 1 (401) -> returns 401 bad_key, /ready still ok
+    // Failure 1 (401 with explicit key-blame + canary confirms BadKey) -> returns 401 bad_key, /ready still ok
     let (s, headers, body) = send_get(&app, "/p1?key=UNAUTH").await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
     assert_eq!(body, "bad_key");
@@ -512,7 +515,7 @@ async fn bad_key_latching_non_short_circuit_and_recovery() {
     assert!(svc.ready_status().ready);
     assert_eq!(svc.ready_status().auth_failures, 1);
 
-    // Failure 2 (403 key-blame) -> returns 403 bad_key, /ready still ok
+    // Failure 2 (403 key-blame + canary confirms BadKey) -> returns 403 bad_key, /ready still ok
     let (s, _, body) = send_get(&app, "/p2?key=BAD").await;
     assert_eq!(s, StatusCode::FORBIDDEN);
     assert_eq!(body, "bad_key");
@@ -532,7 +535,8 @@ async fn bad_key_latching_non_short_circuit_and_recovery() {
     assert_eq!(hdr(&headers, "x-ratelimit-status"), Some("ok"));
     assert_eq!(hdr(&headers, "x-auth-failures"), Some("3"));
 
-    // Probe success on GetServerInfo does NOT clear bad_key
+    // Canary probe still fails for key=BAD -> stays bad_key
+    svc.force_probe_due_for_test();
     svc.check_rate_limiting().await;
     assert!(svc.ready_status().bad_key);
     assert!(!svc.ready_status().ready);
@@ -547,6 +551,114 @@ async fn bad_key_latching_non_short_circuit_and_recovery() {
     assert_eq!(body, "ok");
     assert_eq!(hdr(&headers, "x-bad-key"), Some("false"));
     assert_eq!(hdr(&headers, "x-auth-failures"), Some("0"));
+}
+
+#[tokio::test]
+async fn private_get_friend_list_401_never_marks_bad_key_and_canary_prevents_false_positives() {
+    let mock = MockSteamState::new(|pq| {
+        if pq.starts_with(KEY_CANARY_PATH_PREFIX) {
+            // Canary proves the API key is valid!
+            MockReply::json(
+                StatusCode::OK,
+                r#"{"response":{"players":[{"steamid":"76561197960287930"}]}}"#,
+            )
+        } else if pq.starts_with("/ISteamUser/GetFriendList/") {
+            // Steam's actual private friend list response: HTTP 401 with `{}`
+            MockReply::json(StatusCode::UNAUTHORIZED, "{}")
+        } else if pq.starts_with("/quirky-endpoint") {
+            // Endpoint returns 403 with "Access is denied" even though the key is valid
+            MockReply::text(StatusCode::FORBIDDEN, "Access is denied")
+        } else {
+            MockReply::json(StatusCode::OK, r#"{"ok":true}"#)
+        }
+    });
+
+    let upstream = spawn_mock_steam(mock.clone()).await;
+    let svc = make_service(upstream, None, Duration::from_secs(60), 5000, ProxyBuildInfo::default());
+    let app = build_router(svc.clone());
+
+    // 10 consecutive private GetFriendList 401s must NEVER latch bad_key or count as proxy failures
+    for i in 0..10 {
+        let (s, headers, body) = send_get(
+            &app,
+            &format!("/ISteamUser/GetFriendList/v0001?steamid=7656119912269534{i}&relationship=friend&key=GOODKEY"),
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        assert_eq!(body, "upstream_error");
+        assert_eq!(hdr(&headers, "x-bad-key"), Some("false"));
+    }
+    assert!(svc.ready_status().ready);
+    assert!(!svc.ready_status().bad_key);
+    assert_eq!(svc.ready_status().auth_failures, 0);
+    assert_eq!(svc.metrics().failure, 0);
+    // And no canary probe was even needed for private GetFriendList 401s
+    assert_eq!(mock.hits(), 10);
+
+    // Endpoint-specific 403 with "Access is denied" triggers canary probe, which succeeds -> NOT bad_key!
+    for i in 0..4 {
+        let (s, headers, body) = send_get(&app, &format!("/quirky-endpoint/{i}?key=GOODKEY")).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        assert_eq!(body, "upstream_error");
+        assert_eq!(hdr(&headers, "x-bad-key"), Some("false"));
+    }
+    assert!(svc.ready_status().ready);
+    assert!(!svc.ready_status().bad_key);
+    assert_eq!(svc.ready_status().auth_failures, 0);
+}
+
+#[tokio::test]
+async fn bad_key_self_heals_via_canary_probe_and_cache_ignores_key_param() {
+    let mock = MockSteamState::new(|pq| {
+        if pq.contains("key=FLAKY") {
+            MockReply::text(StatusCode::FORBIDDEN, "Access is denied")
+        } else {
+            MockReply::json(StatusCode::OK, r#"{"ok":true}"#)
+        }
+    });
+
+    let upstream = spawn_mock_steam(mock.clone()).await;
+    let svc = make_service(upstream, None, Duration::from_secs(60), 5000, ProxyBuildInfo::default());
+    let app = build_router(svc.clone());
+
+    // Confirm bad_key latch after 3 verified failures
+    for i in 0..3 {
+        let (s, _, _) = send_get(&app, &format!("/check/{i}?key=FLAKY")).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+    }
+    assert!(svc.ready_status().bad_key);
+
+    // Keyless caller 403 on a fresh proxy must NOT latch bad_key
+    let keyless_svc = make_service(
+        spawn_mock_steam(MockSteamState::new(|_| {
+            MockReply::text(StatusCode::FORBIDDEN, "Access is denied")
+        }))
+        .await,
+        None,
+        Duration::from_secs(60),
+        5000,
+        ProxyBuildInfo::default(),
+    );
+    let keyless_app = build_router(keyless_svc.clone());
+    for i in 0..4 {
+        let (s, _, _) = send_get(&keyless_app, &format!("/nokey/{i}")).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+    }
+    assert!(!keyless_svc.ready_status().bad_key);
+
+    // Now upstream stops rejecting FLAKY -> background probe self-heals bad_key!
+    mock.set_handler(|_| MockReply::json(StatusCode::OK, r#"{"response":{"players":[]}}"#));
+    svc.force_probe_due_for_test();
+    svc.check_rate_limiting().await;
+    assert!(!svc.ready_status().bad_key);
+    assert!(svc.ready_status().ready);
+
+    // Cache key is key-agnostic across key rotations
+    let hits_before = mock.hits();
+    let (s1, _, _) = send_get(&app, "/ISteamUser/GetPlayerSummaries/v0002?steamids=1&key=KEY_A").await;
+    let (s2, _, _) = send_get(&app, "/ISteamUser/GetPlayerSummaries/v0002?steamids=1&key=KEY_B").await;
+    assert_eq!((s1, s2), (StatusCode::OK, StatusCode::OK));
+    assert_eq!(mock.hits(), hits_before + 1);
 }
 
 #[tokio::test]
@@ -656,8 +768,8 @@ async fn combined_bad_key_and_rate_limit_precedence_and_extra_rate_limit_trigger
     // Verify when both bad_key and rate_limited are active, /ready reports rate_limited
     // while setting BOTH X-RateLimit-Status: limited and X-Bad-Key: true.
     let mock = MockSteamState::new(|pq| {
-        if pq.starts_with("/auth") {
-            MockReply::text(StatusCode::UNAUTHORIZED, "")
+        if pq.contains("key=BAD") {
+            MockReply::text(StatusCode::FORBIDDEN, "Access is denied")
         } else {
             MockReply::text(StatusCode::TOO_MANY_REQUESTS, "")
         }
@@ -667,8 +779,8 @@ async fn combined_bad_key_and_rate_limit_precedence_and_extra_rate_limit_trigger
     let app = build_router(svc);
 
     for i in 0..3 {
-        let (s, _, _) = send_get(&app, &format!("/auth/{i}")).await;
-        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        let (s, _, _) = send_get(&app, &format!("/auth/{i}?key=BAD")).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
     }
     let (s, _, _) = send_get(&app, "/limit").await;
     assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);

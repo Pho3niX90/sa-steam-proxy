@@ -1,5 +1,8 @@
 use crate::config::ProxyConfig;
-use crate::steam_failure::{classify_steam_failure, redact_keys_in_text, redact_steam_path_for_log, SteamFailure};
+use crate::steam_failure::{
+    canonical_cache_key, classify_steam_failure, extract_key_param, is_privacy_restricted_endpoint,
+    redact_keys_in_text, redact_steam_path_for_log, SteamFailure,
+};
 use crate::version::ProxyBuildInfo;
 use bytes::Bytes;
 use flate2::read::GzDecoder;
@@ -15,13 +18,25 @@ use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
 pub const SAFE_PROBE_PATH: &str = "/ISteamWebAPIUtil/GetServerInfo/v0001/";
+/// Deterministic public Steam profile (Gabe Newell) used to actively verify
+/// whether an API key is genuinely rejected by Steam before latching `bad_key`,
+/// and to self-heal `bad_key` during background probes.
+pub const KEY_CANARY_PATH_PREFIX: &str = "/ISteamUser/GetPlayerSummaries/v0002/?steamids=76561197960287930&key=";
 pub const RPM_WINDOW: Duration = Duration::from_secs(60);
 pub const MIN_RETRY_BACKOFF_SECS: u64 = 5;
 pub const MAX_RETRY_BACKOFF_SECS: u64 = 300;
-/// Consecutive auth-style failures before marking the proxy not-ready.
+/// Consecutive confirmed auth failures before marking the proxy not-ready.
 pub const BAD_KEY_FAILURE_THRESHOLD: u64 = 3;
 /// Cap decompressed payload size to prevent accidental OOM from corrupt/malicious streams.
 const MAX_DECOMPRESSED_BYTES: u64 = 32 * 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum KeyCanaryOutcome {
+    Valid,
+    BadKey,
+    RateLimited(Option<String>),
+    Inconclusive,
+}
 
 #[derive(Debug, Clone)]
 struct CachedEntry {
@@ -122,6 +137,9 @@ struct ProxyState {
     is_bad_key: bool,
     consecutive_auth_failures: u64,
     last_failure_path: String,
+    /// Last key confirmed bad by the canary probe (never logged); used by
+    /// `check_rate_limiting()` to self-heal if Steam stops rejecting it.
+    last_bad_key: Option<String>,
     retry_backoff_secs: u64,
     rate_limit_start: Option<Instant>,
     next_probe_at: Option<Instant>,
@@ -135,6 +153,7 @@ impl ProxyState {
             is_bad_key: false,
             consecutive_auth_failures: 0,
             last_failure_path: String::new(),
+            last_bad_key: None,
             retry_backoff_secs: MIN_RETRY_BACKOFF_SECS,
             rate_limit_start: None,
             next_probe_at: None,
@@ -369,8 +388,9 @@ impl SteamProxyService {
         } else {
             format!("/{original_path}")
         };
+        let cache_key = canonical_cache_key(&full_path);
 
-        if let Some(cached) = self.cache.get(&full_path) {
+        if let Some(cached) = self.cache.get(&cache_key) {
             debug!("Cache HIT: {}", redact_steam_path_for_log(original_path));
             return ProxyResult::Success {
                 body: cached.body,
@@ -426,7 +446,9 @@ impl SteamProxyService {
                 self.last_duration_ms
                     .store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
                 error!("Steam body read error: {}", redact_keys_in_text(&err.to_string()));
-                return self.finalize_classified(original_path, status_code, retry_after, Bytes::new(), false);
+                return self
+                    .finalize_classified(original_path, status_code, retry_after, Bytes::new(), false)
+                    .await;
             }
         };
 
@@ -462,10 +484,12 @@ impl SteamProxyService {
             false
         };
 
-        let result = self.finalize_classified(original_path, status_code, retry_after, body_bytes.clone(), is_json);
+        let result = self
+            .finalize_classified(original_path, status_code, retry_after, body_bytes.clone(), is_json)
+            .await;
         if matches!(result, ProxyResult::Success { .. }) {
             self.cache.insert(
-                full_path,
+                cache_key,
                 CachedEntry {
                     body: body_bytes,
                     is_json,
@@ -476,7 +500,7 @@ impl SteamProxyService {
         result
     }
 
-    fn finalize_classified(
+    async fn finalize_classified(
         &self,
         original_path: &str,
         status_code: u16,
@@ -496,9 +520,81 @@ impl SteamProxyService {
         }
 
         if classified == Some(SteamFailure::BadKey) {
-            self.handle_auth_failure(original_path, status_code);
+            let Some(key) = extract_key_param(original_path) else {
+                // A single caller omitting `?key=` must not poison the proxy's global bad_key state.
+                self.failure.fetch_add(1, Ordering::Relaxed);
+                warn!(
+                    "Steam returned auth error {} on keyless request {}; not latching proxy bad_key",
+                    status_code,
+                    redact_steam_path_for_log(original_path)
+                );
+                return ProxyResult::Error {
+                    error: ProxyErrorKind::BadKey,
+                    status_code,
+                };
+            };
+
+            // Actively verify against a deterministic public profile before counting an auth failure.
+            // Prevents per-user or endpoint-specific 401/403 responses from poisoning the proxy.
+            let already_canary = original_path.starts_with(KEY_CANARY_PATH_PREFIX);
+            let verdict = if already_canary {
+                KeyCanaryOutcome::BadKey
+            } else {
+                self.verify_key_with_canary(&key).await
+            };
+
+            match verdict {
+                KeyCanaryOutcome::Valid => {
+                    debug!(
+                        "Steam returned {} on {} with auth wording, but canary GetPlayerSummaries succeeded; key is valid",
+                        status_code,
+                        redact_steam_path_for_log(original_path)
+                    );
+                    self.clear_failure_state();
+                    self.failure.fetch_add(1, Ordering::Relaxed);
+                    return ProxyResult::Error {
+                        error: ProxyErrorKind::UpstreamError,
+                        status_code,
+                    };
+                }
+                KeyCanaryOutcome::RateLimited(ra) => {
+                    self.handle_rate_limit(original_path, ra.as_deref());
+                    return ProxyResult::Error {
+                        error: ProxyErrorKind::RateLimited,
+                        status_code: 429,
+                    };
+                }
+                KeyCanaryOutcome::Inconclusive => {
+                    self.failure.fetch_add(1, Ordering::Relaxed);
+                    warn!(
+                        "Key canary probe inconclusive after HTTP {} on {}; not latching bad_key",
+                        status_code,
+                        redact_steam_path_for_log(original_path)
+                    );
+                    return ProxyResult::Error {
+                        error: ProxyErrorKind::UpstreamError,
+                        status_code,
+                    };
+                }
+                KeyCanaryOutcome::BadKey => {
+                    self.handle_auth_failure(original_path, status_code, Some(&key));
+                    return ProxyResult::Error {
+                        error: ProxyErrorKind::BadKey,
+                        status_code,
+                    };
+                }
+            }
+        }
+
+        if status_code == 401 && is_privacy_restricted_endpoint(original_path) {
+            // Normal Steam behavior for private profiles / friend lists (e.g. GetFriendList).
+            // Do not count as a proxy failure or auth failure.
+            debug!(
+                "Steam returned 401 (private profile/resource) on {}",
+                redact_steam_path_for_log(original_path)
+            );
             return ProxyResult::Error {
-                error: ProxyErrorKind::BadKey,
+                error: ProxyErrorKind::UpstreamError,
                 status_code,
             };
         }
@@ -526,73 +622,157 @@ impl SteamProxyService {
         }
     }
 
-    pub async fn check_rate_limiting(&self) {
-        let should_probe = {
-            let now = Instant::now();
-            let state = self.state.lock().expect("proxy state mutex poisoned");
-            if !state.is_rate_limited && !state.is_bad_key {
-                false
-            } else {
-                state.next_probe_at.is_none_or(|at| now >= at)
-            }
-        };
-
-        if !should_probe {
-            return;
-        }
-
-        let url = format!("{}{}", self.steam_api_host, SAFE_PROBE_PATH);
+    async fn verify_key_with_canary(&self, key: &str) -> KeyCanaryOutcome {
+        let url = format!("{}{}{}", self.steam_api_host, KEY_CANARY_PATH_PREFIX, key);
         let res = match self.client.get(&url).header(ACCEPT_ENCODING, "gzip").send().await {
             Ok(r) => r,
             Err(err) => {
-                let mut state = self.state.lock().expect("proxy state mutex poisoned");
-                state.schedule_next_probe(Instant::now());
-                error!("Rate-limit probe error: {}", redact_keys_in_text(&err.to_string()));
-                return;
+                warn!(
+                    "Key canary probe network error: {}",
+                    redact_keys_in_text(&err.to_string())
+                );
+                return KeyCanaryOutcome::Inconclusive;
             }
         };
 
         let status_code = res.status().as_u16();
-        let retry_after = res
-            .headers()
+        let headers = res.headers().clone();
+        let content_encoding = headers
+            .get(CONTENT_ENCODING)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let retry_after = headers
             .get(RETRY_AFTER)
             .and_then(|v| v.to_str().ok())
             .map(ToOwned::to_owned);
-        // Drain body so the keep-alive connection can be reused.
-        let _ = res.bytes().await;
 
-        let now = Instant::now();
-        let mut state = self.state.lock().expect("proxy state mutex poisoned");
+        let raw_bytes = match res.bytes().await {
+            Ok(b) => b,
+            Err(_) => return KeyCanaryOutcome::Inconclusive,
+        };
+        let body_bytes = if content_encoding.contains("gzip") {
+            match gunzip_bounded(&raw_bytes) {
+                Ok(d) => Bytes::from(d),
+                Err(_) => return KeyCanaryOutcome::Inconclusive,
+            }
+        } else {
+            raw_bytes
+        };
+        let body_text = String::from_utf8_lossy(&body_bytes);
 
-        if let Some(ref ra) = retry_after {
-            state.apply_retry_after(ra);
+        match classify_steam_failure(status_code, retry_after.as_deref(), &body_text) {
+            Some(SteamFailure::RateLimited) => KeyCanaryOutcome::RateLimited(retry_after),
+            Some(SteamFailure::BadKey) => KeyCanaryOutcome::BadKey,
+            None if status_code < 400 => KeyCanaryOutcome::Valid,
+            None => KeyCanaryOutcome::Inconclusive,
+        }
+    }
+
+    pub async fn check_rate_limiting(&self) {
+        let (is_rate_limited, is_bad_key, last_bad_key) = {
+            let now = Instant::now();
+            let state = self.state.lock().expect("proxy state mutex poisoned");
+            if !state.is_rate_limited && !state.is_bad_key {
+                return;
+            }
+            if !state.next_probe_at.is_none_or(|at| now >= at) {
+                return;
+            }
+            (state.is_rate_limited, state.is_bad_key, state.last_bad_key.clone())
+        };
+
+        if is_rate_limited {
+            let url = format!("{}{}", self.steam_api_host, SAFE_PROBE_PATH);
+            let res = match self.client.get(&url).header(ACCEPT_ENCODING, "gzip").send().await {
+                Ok(r) => r,
+                Err(err) => {
+                    let mut state = self.state.lock().expect("proxy state mutex poisoned");
+                    state.schedule_next_probe(Instant::now());
+                    error!("Rate-limit probe error: {}", redact_keys_in_text(&err.to_string()));
+                    return;
+                }
+            };
+
+            let status_code = res.status().as_u16();
+            let retry_after = res
+                .headers()
+                .get(RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .map(ToOwned::to_owned);
+            // Drain body so the keep-alive connection can be reused.
+            let _ = res.bytes().await;
+
+            let now = Instant::now();
+            let mut state = self.state.lock().expect("proxy state mutex poisoned");
+
+            if let Some(ref ra) = retry_after {
+                state.apply_retry_after(ra);
+            }
+
+            // GetServerInfo does not need a key; success only clears rate-limit, not bad_key.
+            if status_code < 400 {
+                if state.is_rate_limited {
+                    state.is_rate_limited = false;
+                    state.last_failure_path.clear();
+                    state.retry_backoff_secs = MIN_RETRY_BACKOFF_SECS;
+                    state.next_probe_at = None;
+                    if let Some(started) = state.rate_limit_start.take() {
+                        let duration = now.saturating_duration_since(started).as_secs_f64();
+                        info!("Rate limit lifted after {duration:.1}s");
+                    }
+                }
+            } else if classify_steam_failure(status_code, retry_after.as_deref(), "") == Some(SteamFailure::RateLimited)
+            {
+                if retry_after.is_none() {
+                    state.retry_backoff_secs = (state.retry_backoff_secs * 2).min(MAX_RETRY_BACKOFF_SECS);
+                }
+                state.schedule_next_probe(now);
+                warn!(
+                    "Still rate-limited. Increasing backoff to {}s.",
+                    state.retry_backoff_secs
+                );
+                return;
+            } else {
+                state.schedule_next_probe(now);
+                warn!("Unexpected probe status: {status_code}");
+                return;
+            }
         }
 
-        // GetServerInfo does not need a key; success only clears rate-limit, not bad_key.
-        if status_code < 400 {
-            if state.is_rate_limited {
-                state.is_rate_limited = false;
-                state.last_failure_path.clear();
-                state.retry_backoff_secs = MIN_RETRY_BACKOFF_SECS;
-                state.next_probe_at = None;
-                if let Some(started) = state.rate_limit_start.take() {
-                    let duration = now.saturating_duration_since(started).as_secs_f64();
-                    info!("Rate limit lifted after {duration:.1}s");
+        // If bad_key is latched, self-heal by re-verifying the last bad key via canary
+        // so a pod pulled from LB rotation by health-service isn't stranded forever.
+        if is_bad_key {
+            if let Some(key) = last_bad_key {
+                match self.verify_key_with_canary(&key).await {
+                    KeyCanaryOutcome::Valid => {
+                        let mut state = self.state.lock().expect("proxy state mutex poisoned");
+                        state.is_bad_key = false;
+                        state.consecutive_auth_failures = 0;
+                        state.last_bad_key = None;
+                        state.retry_backoff_secs = MIN_RETRY_BACKOFF_SECS;
+                        state.next_probe_at = None;
+                        info!("Cleared bad_key after canary key probe succeeded");
+                    }
+                    KeyCanaryOutcome::BadKey => {
+                        let now = Instant::now();
+                        let mut state = self.state.lock().expect("proxy state mutex poisoned");
+                        state.retry_backoff_secs = (state.retry_backoff_secs * 2).min(MAX_RETRY_BACKOFF_SECS);
+                        state.schedule_next_probe(now);
+                        warn!(
+                            "Key canary still failing; keeping bad_key (next probe in {}s)",
+                            state.retry_backoff_secs
+                        );
+                    }
+                    KeyCanaryOutcome::RateLimited(ra) => {
+                        self.handle_rate_limit(KEY_CANARY_PATH_PREFIX, ra.as_deref());
+                    }
+                    KeyCanaryOutcome::Inconclusive => {
+                        let mut state = self.state.lock().expect("proxy state mutex poisoned");
+                        state.schedule_next_probe(Instant::now());
+                    }
                 }
             }
-            // bad_key stays until a real keyed request succeeds.
-        } else if classify_steam_failure(status_code, retry_after.as_deref(), "") == Some(SteamFailure::RateLimited) {
-            if retry_after.is_none() {
-                state.retry_backoff_secs = (state.retry_backoff_secs * 2).min(MAX_RETRY_BACKOFF_SECS);
-            }
-            state.schedule_next_probe(now);
-            warn!(
-                "Still rate-limited. Increasing backoff to {}s.",
-                state.retry_backoff_secs
-            );
-        } else {
-            state.schedule_next_probe(now);
-            warn!("Unexpected probe status: {status_code}");
         }
     }
 
@@ -612,15 +792,20 @@ impl SteamProxyService {
         state.schedule_next_probe(now);
     }
 
-    fn handle_auth_failure(&self, path: &str, status_code: u16) {
+    fn handle_auth_failure(&self, path: &str, status_code: u16, key: Option<&str>) {
         self.failure.fetch_add(1, Ordering::Relaxed);
+        let now = Instant::now();
         let mut state = self.state.lock().expect("proxy state mutex poisoned");
         state.consecutive_auth_failures += 1;
         state.last_failure_path = path.to_string();
+        if let Some(k) = key {
+            state.last_bad_key = Some(k.to_string());
+        }
         if state.consecutive_auth_failures >= BAD_KEY_FAILURE_THRESHOLD && !state.is_bad_key {
             state.is_bad_key = true;
+            state.schedule_next_probe(now);
             error!(
-                "Marked bad_key after {} auth failures (last HTTP {} on {})",
+                "Marked bad_key after {} confirmed auth failures (last HTTP {} on {})",
                 state.consecutive_auth_failures,
                 status_code,
                 redact_steam_path_for_log(path)
@@ -635,6 +820,7 @@ impl SteamProxyService {
             info!("Cleared bad_key after successful Steam response");
         }
         state.is_bad_key = false;
+        state.last_bad_key = None;
     }
 
     /// Test helper: force `next_probe_at` to the past so `check_rate_limiting()` probes immediately.

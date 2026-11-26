@@ -19,9 +19,22 @@ fn bad_key_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?i)access is denied|invalid.*(?:api.?)?key|(?:api.?)?key.*(?:invalid|denied|revoked|missing)|unauthorized",
+            r"(?i)access is denied|verify your\s*(?:<[^>]+>\s*)?key=|invalid.*(?:api.?)?key|(?:api.?)?key.*(?:invalid|denied|revoked|missing)|unauthorized",
         )
         .expect("valid bad key regex")
+    })
+}
+
+/// Strict key-blame matcher used for HTTP 401 responses. Steam returns HTTP 401
+/// with `{}` / empty body / generic "Unauthorized" for private profiles and
+/// friend lists, whereas genuine key errors explicitly blame the `key=` param.
+fn explicit_bad_key_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?i)access is denied|verify your\s*(?:<[^>]+>\s*)?key=|invalid.*(?:api.?)?key|(?:api.?)?key.*(?:invalid|denied|revoked|missing)",
+        )
+        .expect("valid explicit bad key regex")
     })
 }
 
@@ -35,11 +48,61 @@ fn redact_text_key_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r#"(?i)([?&]key=)[^&\s)"']*"#).expect("valid redact text regex"))
 }
 
+/// Returns true for Steam Web API endpoints where HTTP 401 is the normal
+/// response for a private profile or private friend list rather than a bad key.
+pub fn is_privacy_restricted_endpoint(path: &str) -> bool {
+    let path_only = path.split('?').next().unwrap_or("").to_ascii_lowercase();
+    let trimmed = path_only.trim_start_matches('/');
+    trimmed.starts_with("isteamuser/getfriendlist")
+        || trimmed.starts_with("isteamuser/getusergrouplist")
+        || trimmed.starts_with("iplayerservice/getownedgames")
+        || trimmed.starts_with("iplayerservice/getrecentlyplayedgames")
+        || trimmed.starts_with("iplayerservice/getsteamlevel")
+        || trimmed.starts_with("iplayerservice/getbadges")
+        || trimmed.starts_with("isteamuserstats/getuserstatsforgame")
+        || trimmed.starts_with("isteamuserstats/getplayerachievements")
+}
+
+/// Extract the `key=` query parameter value (case-insensitive) from a request path.
+pub fn extract_key_param(path: &str) -> Option<String> {
+    let query = path.split_once('?')?.1;
+    for pair in query.split('&') {
+        if let Some((k, v)) = pair.split_once('=') {
+            if k.eq_ignore_ascii_case("key") && !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Strip the `key=` query parameter from a path to produce a key-agnostic cache key.
+pub fn canonical_cache_key(path: &str) -> String {
+    let normalized = if path.starts_with('/') {
+        Cow::Borrowed(path)
+    } else {
+        Cow::Owned(format!("/{path}"))
+    };
+    let Some((base, query)) = normalized.split_once('?') else {
+        return normalized.into_owned();
+    };
+    let kept: Vec<&str> = query
+        .split('&')
+        .filter(|pair| !pair.is_empty() && !pair.split_once('=').is_some_and(|(k, _)| k.eq_ignore_ascii_case("key")))
+        .collect();
+    if kept.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base}?{}", kept.join("&"))
+    }
+}
+
 /// Steam historically does not use 429 reliably. Detect:
 /// - 429, 420 (unofficial Steam throttle), or Retry-After → RateLimited
 /// - 503 (Steam: unavailable / too busy) → RateLimited (backoff + probe)
 /// - body rate-limit wording → RateLimited
-/// - 401 / explicit invalid-key wording on 403 → BadKey
+/// - 401 with explicit invalid-key wording → BadKey (bare 401 / `{}` is Steam's private profile response)
+/// - 403 with explicit invalid-key wording → BadKey
 /// - bare / empty 403 → RateLimited (Steam's common throttle; not a definitive bad key)
 pub fn classify_steam_failure(status_code: u16, retry_after: Option<&str>, body_text: &str) -> Option<SteamFailure> {
     let has_retry_after = retry_after.is_some_and(|v| !v.is_empty());
@@ -52,7 +115,12 @@ pub fn classify_steam_failure(status_code: u16, retry_after: Option<&str>, body_
     }
 
     if status_code == 401 {
-        return Some(SteamFailure::BadKey);
+        // Steam returns HTTP 401 (with `{}` or empty body) for private friend lists / profiles.
+        // Only treat 401 as BadKey when the response body explicitly blames the API key.
+        if explicit_bad_key_re().is_match(body_text) {
+            return Some(SteamFailure::BadKey);
+        }
+        return None;
     }
     if status_code == 403 {
         if bad_key_re().is_match(body_text) {
@@ -118,8 +186,67 @@ mod tests {
     }
 
     #[test]
-    fn treats_401_as_bad_key() {
-        assert_eq!(classify_steam_failure(401, None, ""), Some(SteamFailure::BadKey));
+    fn treats_bare_or_private_401_as_non_key_error() {
+        assert_eq!(classify_steam_failure(401, None, ""), None);
+        assert_eq!(classify_steam_failure(401, None, "{}"), None);
+        assert_eq!(classify_steam_failure(401, None, "Unauthorized"), None);
+    }
+
+    #[test]
+    fn treats_explicit_key_blame_401_as_bad_key() {
+        assert_eq!(
+            classify_steam_failure(
+                401,
+                None,
+                "Access is denied. Please verify your <pre>key=</pre> parameter."
+            ),
+            Some(SteamFailure::BadKey)
+        );
+        assert_eq!(
+            classify_steam_failure(401, None, "Invalid API key"),
+            Some(SteamFailure::BadKey)
+        );
+    }
+
+    #[test]
+    fn identifies_privacy_restricted_endpoints() {
+        assert!(is_privacy_restricted_endpoint(
+            "/ISteamUser/GetFriendList/v0001?steamid=76561199122695345&relationship=friend&key=ABC"
+        ));
+        assert!(is_privacy_restricted_endpoint(
+            "/IPlayerService/GetSteamLevel/v1?steamid=1"
+        ));
+        assert!(!is_privacy_restricted_endpoint(
+            "/ISteamUser/GetPlayerSummaries/v0002?steamids=1"
+        ));
+    }
+
+    #[test]
+    fn extracts_key_and_canonicalizes_cache_key() {
+        assert_eq!(
+            extract_key_param("/ISteamUser/GetPlayerSummaries/v0002?steamids=1&key=SECRET123"),
+            Some("SECRET123".to_string())
+        );
+        assert_eq!(
+            extract_key_param("/ISteamUser/GetPlayerSummaries/v0002?KEY=ABC&steamids=1"),
+            Some("ABC".to_string())
+        );
+        assert_eq!(
+            extract_key_param("/ISteamUser/GetPlayerSummaries/v0002?steamids=1"),
+            None
+        );
+        assert_eq!(extract_key_param("/test?key="), None);
+
+        assert_eq!(
+            canonical_cache_key("/ISteamUser/GetPlayerSummaries/v0002?steamids=1&key=SECRET123"),
+            "/ISteamUser/GetPlayerSummaries/v0002?steamids=1"
+        );
+        assert_eq!(
+            canonical_cache_key("/ISteamUser/GetPlayerSummaries/v0002?KEY=ABC&steamids=1"),
+            "/ISteamUser/GetPlayerSummaries/v0002?steamids=1"
+        );
+        assert_eq!(canonical_cache_key("/item?key=ABC"), "/item");
+        assert_eq!(canonical_cache_key("item?id=1"), "/item?id=1");
     }
 
     #[test]
